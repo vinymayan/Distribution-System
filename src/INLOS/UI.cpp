@@ -37,6 +37,11 @@ namespace INLOS::UI
         std::set<std::string> g_activeTypeFilters;
         std::unordered_map<std::string, std::string> g_language;
 
+        void DrawSkillField(
+            Reward& a_reward,
+            std::string_view a_stateID);
+        void DrawSkillLevelMode(Reward& a_reward);
+
         void LoadLanguage()
         {
             g_language.clear();
@@ -362,6 +367,8 @@ namespace INLOS::UI
             BlacklistFilter& a_filter,
             bool& a_remove)
         {
+            DistributionCore::UI::DrawFilterOperator(
+                "Match", a_filter);
             const auto options =
                 DistributionCore::FilterRegistry().AvailableFor(
                     DistributionCore::Domain::kINLOS);
@@ -420,6 +427,12 @@ namespace INLOS::UI
                 ImGuiMCP::InputInt(
                     "Option",
                     &a_filter.optionMode);
+            }
+            if (a_filter.type == "City Status") {
+                EnumCombo(
+                    "City Status",
+                    a_filter.optionMode,
+                    { { 0, "Inside a City" }, { 1, "Outside a City" } });
             }
             if (ImGuiMCP::Button("Remove Filter")) {
                 a_remove = true;
@@ -516,6 +529,7 @@ namespace INLOS::UI
             }
             else if (filter.type == "NPC Trait" ||
                      filter.type == "Cell Type" ||
+                     filter.type == "City Status" ||
                      filter.type == "Equipped Category") {
                 filter.optionMode =
                     std::max(
@@ -564,7 +578,10 @@ namespace INLOS::UI
                         descriptor.id == "Actor Value") ||
                     (rewardMode &&
                         (descriptor.id == "Experience" ||
-                         descriptor.id == "Skill Experience"))) {
+                         descriptor.id == "Skill XP" ||
+                         descriptor.id == "Skill Level" ||
+                         descriptor.id == "Perk Points" ||
+                         descriptor.id == "NSM Resource"))) {
                     continue;
                 }
                 if (!Manager::GetSingleton()
@@ -1310,11 +1327,17 @@ namespace INLOS::UI
                                     reward.formIDStr,
                                     playableOnly);
                             }
-                            else if (reward.typeReward ==
-                                     "Skill Experience") {
-                                InputString(
-                                    "##Skill",
-                                    reward.editorID);
+                            else if (reward.typeReward == "Skill XP" ||
+                                     reward.typeReward == "Skill Level") {
+                                DrawSkillField(
+                                    reward,
+                                    std::format(
+                                        "INLOS.Picker.Skill.{}.{}",
+                                        groupIndex,
+                                        rewardIndex));
+                                if (reward.typeReward == "Skill Level") {
+                                    DrawSkillLevelMode(reward);
+                                }
                             }
                             else {
                                 ImGuiMCP::TextDisabled(
@@ -1605,10 +1628,14 @@ namespace INLOS::UI
                     a_blacklist ?
                         "BlacklistActorValues" :
                         "TargetActorValues",
-                    8,
+                    9,
                     ImGuiMCP::ImGuiTableFlags_Borders |
                         ImGuiMCP::ImGuiTableFlags_RowBg |
                         ImGuiMCP::ImGuiTableFlags_Resizable)) {
+                ImGuiMCP::TableSetupColumn(
+                    "Match",
+                    ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
+                    100.0f);
                 ImGuiMCP::TableSetupColumn(
                     "Actor Value",
                     ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
@@ -1663,11 +1690,14 @@ namespace INLOS::UI
                         static_cast<int>(index));
                     ImGuiMCP::TableNextRow();
                     ImGuiMCP::TableSetColumnIndex(0);
+                    DistributionCore::UI::DrawFilterOperator(
+                        "##FilterOperator", filter);
+                    ImGuiMCP::TableSetColumnIndex(1);
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     InputString(
                         "##ActorValue",
                         filter.actorValueName);
-                    ImGuiMCP::TableSetColumnIndex(1);
+                    ImGuiMCP::TableSetColumnIndex(2);
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     DistributionCore::UI::
                         DrawSearchableCombo(
@@ -1683,7 +1713,7 @@ namespace INLOS::UI
                             GetActorValueOptions(),
                             filter.actorValueName,
                             1);
-                    ImGuiMCP::TableSetColumnIndex(2);
+                    ImGuiMCP::TableSetColumnIndex(3);
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     EnumCombo(
                         "##Mode",
@@ -1693,7 +1723,7 @@ namespace INLOS::UI
                             { ActorValueMode::kPermanent, "Permanent" },
                             { ActorValueMode::kMaximum, "Maximum" }
                         });
-                    ImGuiMCP::TableSetColumnIndex(3);
+                    ImGuiMCP::TableSetColumnIndex(4);
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     EnumCombo(
                         "##Comparison",
@@ -1704,7 +1734,7 @@ namespace INLOS::UI
                             { NumericComparison::kEqual, "=" },
                             { NumericComparison::kBetween, "Between" }
                         });
-                    ImGuiMCP::TableSetColumnIndex(4);
+                    ImGuiMCP::TableSetColumnIndex(5);
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     ImGuiMCP::InputFloat(
                         "##Minimum",
@@ -1712,7 +1742,7 @@ namespace INLOS::UI
                         0.0f,
                         0.0f,
                         "%.1f");
-                    ImGuiMCP::TableSetColumnIndex(5);
+                    ImGuiMCP::TableSetColumnIndex(6);
                     if (filter.comparison ==
                         NumericComparison::kBetween) {
                         ImGuiMCP::SetNextItemWidth(-1.0f);
@@ -1728,7 +1758,7 @@ namespace INLOS::UI
                             filter.minimumValue;
                         ImGuiMCP::TextDisabled("-");
                     }
-                    ImGuiMCP::TableSetColumnIndex(6);
+                    ImGuiMCP::TableSetColumnIndex(7);
                     if (IsActorValueFilterValid(filter)) {
                         ImGuiMCP::TextColored(
                             { 0.3f, 0.9f, 0.4f, 1.0f },
@@ -1739,7 +1769,7 @@ namespace INLOS::UI
                             { 1.0f, 0.25f, 0.25f, 1.0f },
                             "INVALID");
                     }
-                    ImGuiMCP::TableSetColumnIndex(7);
+                    ImGuiMCP::TableSetColumnIndex(8);
                     if (ImGuiMCP::Button("X")) {
                         filters.erase(
                             filters.begin() + index);
@@ -1766,8 +1796,12 @@ namespace INLOS::UI
                     a_blacklist ?
                         "BlacklistTable" :
                         "TargetsTable",
-                    5,
+                    6,
                     ImGuiMCP::ImGuiTableFlags_Borders)) {
+                ImGuiMCP::TableSetupColumn(
+                    "Match",
+                    ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
+                    100.0f);
                 ImGuiMCP::TableSetupColumn(
                     "Type",
                     ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
@@ -1807,9 +1841,12 @@ namespace INLOS::UI
                         static_cast<int>(index));
                     ImGuiMCP::TableNextRow();
                     ImGuiMCP::TableSetColumnIndex(0);
+                    DistributionCore::UI::DrawFilterOperator(
+                        "##FilterOperator", filter);
+                    ImGuiMCP::TableSetColumnIndex(1);
                     ImGuiMCP::TextUnformatted(
                         filter.type.c_str());
-                    ImGuiMCP::TableSetColumnIndex(1);
+                    ImGuiMCP::TableSetColumnIndex(2);
                     const auto& list =
                         Manager::GetSingleton()->GetList(
                             filter.type);
@@ -1828,7 +1865,7 @@ namespace INLOS::UI
                                     filter.editorID.c_str() :
                                     "Not Found")));
 
-                    ImGuiMCP::TableSetColumnIndex(2);
+                    ImGuiMCP::TableSetColumnIndex(3);
                     if (IsNumericValueFilterType(
                             filter.type)) {
                         ImGuiMCP::SetNextItemWidth(120.0f);
@@ -1865,15 +1902,23 @@ namespace INLOS::UI
                                 filter.minimumValue;
                         }
                     }
+                    else if (filter.type == "City Status") {
+                        ImGuiMCP::SetNextItemWidth(170.0f);
+                        EnumCombo(
+                            "##CityStatus",
+                            filter.optionMode,
+                            { { 0, "Inside a City" },
+                              { 1, "Outside a City" } });
+                    }
                     else {
                         ImGuiMCP::TextDisabled("-");
                     }
-                    ImGuiMCP::TableSetColumnIndex(3);
+                    ImGuiMCP::TableSetColumnIndex(4);
                     ImGuiMCP::TextUnformatted(
                         filter.type == "Source Plugin" ?
                             filter.optionText.c_str() :
                             filter.formIDStr.c_str());
-                    ImGuiMCP::TableSetColumnIndex(4);
+                    ImGuiMCP::TableSetColumnIndex(5);
                     if (ImGuiMCP::Button("X")) {
                         filters.erase(
                             filters.begin() + index);
@@ -1888,47 +1933,124 @@ namespace INLOS::UI
             }
         }
 
-        void DrawNSMSkillField(
+        struct VanillaSkillOption
+        {
+            std::string_view id;
+            std::string_view label;
+        };
+
+        constexpr std::array<VanillaSkillOption, 18> kVanillaSkills{ {
+            { "OneHanded", "One Handed" },
+            { "TwoHanded", "Two Handed" },
+            { "Archery", "Archery" },
+            { "Block", "Block" },
+            { "Smithing", "Smithing" },
+            { "HeavyArmor", "Heavy Armor" },
+            { "LightArmor", "Light Armor" },
+            { "Pickpocket", "Pickpocket" },
+            { "Lockpicking", "Lockpicking" },
+            { "Sneak", "Sneak" },
+            { "Alchemy", "Alchemy" },
+            { "Speech", "Speech" },
+            { "Alteration", "Alteration" },
+            { "Conjuration", "Conjuration" },
+            { "Destruction", "Destruction" },
+            { "Illusion", "Illusion" },
+            { "Restoration", "Restoration" },
+            { "Enchanting", "Enchanting" }
+        } };
+
+        std::string SkillDisplayName(const std::string_view a_reference)
+        {
+            const auto source = GetSkillSource(a_reference);
+            const auto skillID = GetSkillID(a_reference);
+            if (source == SkillSource::kVanilla) {
+                const auto found = std::ranges::find_if(
+                    kVanillaSkills,
+                    [&](const VanillaSkillOption& a_skill) {
+                        return a_skill.id == skillID;
+                    });
+                if (found != kVanillaSkills.end()) {
+                    return std::format("{} (Vanilla)", found->label);
+                }
+            }
+            if (source == SkillSource::kNSM && !skillID.empty()) {
+                return std::format("{} (NSM)", skillID);
+            }
+            return {};
+        }
+
+        void InitializeSkillReward(Reward& a_reward)
+        {
+            if (GetSkillSource(a_reward.editorID) == SkillSource::kInvalid) {
+                a_reward.editorID = MakeSkillReference(
+                    SkillSource::kVanilla,
+                    kVanillaSkills.front().id);
+            }
+            if (a_reward.typeReward == "Skill Level" &&
+                a_reward.functionOnType !=
+                    static_cast<int>(SkillLevelMode::kBonus)) {
+                a_reward.functionOnType =
+                    static_cast<int>(SkillLevelMode::kPermanent);
+            }
+        }
+
+        void DrawSkillField(
             Reward& a_reward,
             const std::string_view a_stateID)
         {
+            InitializeSkillReward(a_reward);
             const auto& skills =
                 NewSkillMenu::AvailableSkills();
+            std::vector<
+                DistributionCore::UI::SearchableComboOption>
+                options;
+            options.reserve(kVanillaSkills.size() + skills.size());
+            for (const auto& skill : kVanillaSkills) {
+                options.push_back({
+                    MakeSkillReference(SkillSource::kVanilla, skill.id),
+                    std::format("{} (Vanilla)", skill.label)
+                });
+            }
+            for (const auto& skill : skills) {
+                options.push_back({
+                    MakeSkillReference(SkillSource::kNSM, skill),
+                    std::format("{} (NSM)", skill)
+                });
+            }
+            const auto preview = SkillDisplayName(a_reward.editorID);
             ImGuiMCP::ImVec2 available;
             ImGuiMCP::GetContentRegionAvail(&available);
             ImGuiMCP::SetNextItemWidth(
-                std::max(120.0f, available.x - 95.0f));
-            if (!skills.empty()) {
-                std::vector<
-                    DistributionCore::UI::
-                        SearchableComboOption>
-                    options;
-                options.reserve(skills.size());
-                for (const auto& skill : skills) {
-                    options.push_back({ skill, skill });
-                }
-                DistributionCore::UI::
-                    DrawSearchableCombo(
-                        "##NSMSkillID",
-                        a_reward.editorID.empty() ?
-                            "Select Skill Tree..." :
-                            a_reward.editorID.c_str(),
-                        a_stateID,
-                        options,
-                        a_reward.editorID,
-                        (static_cast<std::uint64_t>(
-                            NewSkillMenu::
-                                InterfaceVersion()) << 32) |
-                            skills.size());
-            }
-            else {
-                InputString(
-                    "##NSMSkillID",
-                    a_reward.editorID);
-            }
+                std::max(160.0f, available.x - 105.0f));
+            DistributionCore::UI::DrawSearchableCombo(
+                "##SkillID",
+                preview.empty() ? "Select Skill..." : preview.c_str(),
+                a_stateID,
+                options,
+                a_reward.editorID,
+                (static_cast<std::uint64_t>(
+                    NewSkillMenu::InterfaceVersion()) << 32) |
+                    skills.size());
+
+            const auto source = GetSkillSource(a_reward.editorID);
+            const auto skillID = GetSkillID(a_reward.editorID);
+            const auto vanillaValid =
+                source == SkillSource::kVanilla &&
+                std::ranges::any_of(
+                    kVanillaSkills,
+                    [&](const VanillaSkillOption& a_skill) {
+                        return a_skill.id == skillID;
+                    });
+            const auto nsmValid = source == SkillSource::kNSM &&
+                NewSkillMenu::HasSkill(skillID);
             ImGuiMCP::SameLine();
-            if (NewSkillMenu::HasSkill(
-                    a_reward.editorID)) {
+            if (vanillaValid && a_reward.typeReward == "Skill XP") {
+                ImGuiMCP::TextColored(
+                    { 0.95f, 0.75f, 0.3f, 1.0f },
+                    "PLAYER ONLY");
+            }
+            else if (vanillaValid || nsmValid) {
                 ImGuiMCP::TextColored(
                     { 0.3f, 0.9f, 0.4f, 1.0f },
                     "VALID");
@@ -1937,6 +2059,30 @@ namespace INLOS::UI
                 ImGuiMCP::TextColored(
                     { 1.0f, 0.65f, 0.2f, 1.0f },
                     "UNRESOLVED");
+            }
+        }
+
+        void DrawSkillLevelMode(Reward& a_reward)
+        {
+            auto mode = a_reward.functionOnType ==
+                    static_cast<int>(SkillLevelMode::kBonus) ?
+                static_cast<int>(SkillLevelMode::kBonus) :
+                static_cast<int>(SkillLevelMode::kPermanent);
+            ImGuiMCP::SetNextItemWidth(180.0f);
+            if (EnumCombo(
+                    "##SkillLevelMode",
+                    mode,
+                    { { static_cast<int>(SkillLevelMode::kPermanent),
+                          "Permanent Level" },
+                      { static_cast<int>(SkillLevelMode::kBonus),
+                          "Bonus Level" } })) {
+                a_reward.functionOnType = mode;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip(
+                    mode == static_cast<int>(SkillLevelMode::kPermanent) ?
+                        "Changes the skill's base level." :
+                        "Adds a permanent modifier without changing its base level.");
             }
         }
 
@@ -2038,7 +2184,8 @@ namespace INLOS::UI
                     RewardGroup{ .name = name });
             }
             ImGuiMCP::SameLine();
-            if (NewSkillMenu::IsAvailable()) {
+            if (NewSkillMenu::IsAvailable() ||
+                NewSkillMenu::Initialize()) {
                 if (ImGuiMCP::Button(
                         "Refresh NSM Lists")) {
                     NewSkillMenu::RefreshSkills();
@@ -2149,50 +2296,27 @@ namespace INLOS::UI
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(
-                            "+ Vanilla Skill XP")) {
+                            "+ Skill XP")) {
                         Reward reward;
-                        reward.typeReward =
-                            "Skill Experience";
-                        reward.editorID = "OneHanded";
+                        reward.typeReward = "Skill XP";
+                        InitializeSkillReward(reward);
                         group.rewards.push_back(
                             std::move(reward));
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(
-                            "+ NSM Skill XP")) {
+                            "+ Skill Level")) {
                         Reward reward;
-                        reward.typeReward =
-                            "NSM Skill Experience";
-                        if (!NewSkillMenu::
-                                AvailableSkills().empty()) {
-                            reward.editorID =
-                                NewSkillMenu::
-                                    AvailableSkills().front();
-                        }
+                        reward.typeReward = "Skill Level";
+                        InitializeSkillReward(reward);
                         group.rewards.push_back(
                             std::move(reward));
                     }
                     ImGuiMCP::SameLine();
                     if (ImGuiMCP::Button(
-                            "+ NSM Skill Bonus")) {
+                            "+ Perk Points")) {
                         Reward reward;
-                        reward.typeReward =
-                            "NSM Skill Bonus";
-                        if (!NewSkillMenu::
-                                AvailableSkills().empty()) {
-                            reward.editorID =
-                                NewSkillMenu::
-                                    AvailableSkills().front();
-                        }
-                        group.rewards.push_back(
-                            std::move(reward));
-                    }
-                    ImGuiMCP::SameLine();
-                    if (ImGuiMCP::Button(
-                            "+ NSM Perk Points")) {
-                        Reward reward;
-                        reward.typeReward =
-                            "NSM Perk Points";
+                        reward.typeReward = "Perk Points";
                         group.rewards.push_back(
                             std::move(reward));
                     }
@@ -2292,25 +2416,18 @@ namespace INLOS::UI
                             ImGuiMCP::TextUnformatted(
                                 reward.typeReward.c_str());
                             ImGuiMCP::TableSetColumnIndex(1);
-                            if (reward.typeReward ==
-                                "Skill Experience") {
-                                ImGuiMCP::SetNextItemWidth(-1.0f);
-                                InputString(
-                                    "##Skill",
-                                    reward.editorID);
-                            }
-                            else if (
-                                reward.typeReward ==
-                                    "NSM Skill Experience" ||
-                                reward.typeReward ==
-                                    "NSM Skill Bonus") {
-                                DrawNSMSkillField(
+                            if (reward.typeReward == "Skill XP" ||
+                                reward.typeReward == "Skill Level") {
+                                DrawSkillField(
                                     reward,
                                     std::format(
-                                        "INLOS.{}.NSM.{}.{}",
+                                        "INLOS.{}.Skill.{}.{}",
                                         rule.id,
                                         groupIndex,
                                         rewardIndex));
+                                if (reward.typeReward == "Skill Level") {
+                                    DrawSkillLevelMode(reward);
+                                }
                             }
                             else if (
                                 reward.typeReward ==
@@ -2329,7 +2446,7 @@ namespace INLOS::UI
                                     "INLOS Experience");
                             }
                             else if (reward.typeReward ==
-                                     "NSM Perk Points") {
+                                     "Perk Points") {
                                 ImGuiMCP::TextUnformatted(
                                     "Configured Loot Receiver");
                             }
@@ -2445,10 +2562,12 @@ namespace INLOS::UI
                     "Plugin|FormID",
                     a_reward.formIDStr);
             }
-            if (a_reward.typeReward == "Skill Experience") {
-                InputString(
-                    "Skill Actor Value",
-                    a_reward.editorID);
+            if (a_reward.typeReward == "Skill XP" ||
+                a_reward.typeReward == "Skill Level") {
+                DrawSkillField(a_reward, "INLOS.Legacy.Skill");
+                if (a_reward.typeReward == "Skill Level") {
+                    DrawSkillLevelMode(a_reward);
+                }
             }
             auto amount = static_cast<int>(a_reward.amount);
             if (ImGuiMCP::InputInt("Amount", &amount)) {

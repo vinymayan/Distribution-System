@@ -22,7 +22,8 @@ namespace WIYT
 
         void AppendFilter(
             std::ostringstream& a_stream,
-            const BlacklistFilter& a_filter)
+            const BlacklistFilter& a_filter,
+            const bool a_includeOperator = true)
         {
             a_stream << "|F:" << a_filter.type << ':' <<
                 a_filter.formIDStr << ':' << a_filter.editorID << ':' <<
@@ -31,6 +32,9 @@ namespace WIYT
                 static_cast<int>(a_filter.actorValueMode) << ':' <<
                 static_cast<int>(a_filter.comparison) << ':' <<
                 a_filter.minimumValue << ':' << a_filter.maximumValue;
+            if (a_includeOperator) {
+                a_stream << ':' << a_filter.isNot;
+            }
         }
     }
 
@@ -128,7 +132,7 @@ namespace WIYT
             a_requirement.filtersRequireAll;
         const auto append = [&](const auto& a_filters) {
             for (const auto& filter : a_filters) {
-                AppendFilter(stream, filter);
+                AppendFilter(stream, filter, false);
             }
         };
         append(a_requirement.playerPrerequisiteFilters);
@@ -262,7 +266,8 @@ namespace WIYT
             a_type == "Location" ||
             a_type == "Worldspace" ||
             a_type == "Location Keyword" ||
-            a_type == "Cell Type";
+            a_type == "Cell Type" ||
+            a_type == "City Status";
         if (a_scope == FilterScope::kEnvironment) {
             return isEnvironment;
         }

@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+﻿cmake_minimum_required(VERSION 3.21)
 
 if(NOT DEFINED ENV{COMMONLIB_SSE_FOLDER})
     message(FATAL_ERROR "Missing COMMONLIB_SSE_FOLDER environment variable")
@@ -175,6 +175,8 @@ target_link_libraries(
     miniz::miniz
     unofficial::sqlite3::sqlite3)
 target_compile_definitions(WIYT PRIVATE WIYT_PLUGIN)
+
+add_dependencies(${PROJECT_NAME} INLOS WIYT)
 
 source_group(
     TREE "${CMAKE_CURRENT_SOURCE_DIR}"

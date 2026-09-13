@@ -394,7 +394,18 @@ namespace WIYT
             }
             const auto predicate =
                 [&](const BlacklistFilter& a_filter) {
-                    return MatchSourceFilter(a_source, a_filter);
+                    const auto* descriptor =
+                        DistributionCore::FilterRegistry().Find(a_filter.type);
+                    if (descriptor &&
+                        (descriptor->capabilities & DistributionCore::ToMask(
+                            DistributionCore::TypeCapability::kRequiresForm)) != 0 &&
+                        ResolveFormID(a_filter.type, a_filter.editorID,
+                            a_filter.formIDStr) == 0) {
+                        return false;
+                    }
+                    return ApplyFilterOperator(
+                        MatchSourceFilter(a_source, a_filter),
+                        a_filter.isNot);
                 };
             return a_requireAll ?
                 std::ranges::all_of(a_filters, predicate) :
@@ -415,6 +426,12 @@ namespace WIYT
                             CellTypeFilter::kInterior ?
                         a_event.cell->IsInteriorCell() :
                         !a_event.cell->IsInteriorCell());
+            }
+            if (a_filter.type == "City Status") {
+                const auto inside = DistributionCore::IsCityLocation(
+                    a_event.location);
+                return static_cast<CityStatusFilter>(a_filter.optionMode) ==
+                    CityStatusFilter::kInsideCity ? inside : !inside;
             }
             if (expected == 0) {
                 return false;
@@ -468,7 +485,18 @@ namespace WIYT
             }
             const auto predicate =
                 [&](const BlacklistFilter& a_filter) {
-                    return MatchEnvironmentFilter(a_event, a_filter);
+                    const auto* descriptor =
+                        DistributionCore::FilterRegistry().Find(a_filter.type);
+                    if (descriptor &&
+                        (descriptor->capabilities & DistributionCore::ToMask(
+                            DistributionCore::TypeCapability::kRequiresForm)) != 0 &&
+                        ResolveFormID(a_filter.type, a_filter.editorID,
+                            a_filter.formIDStr) == 0) {
+                        return false;
+                    }
+                    return ApplyFilterOperator(
+                        MatchEnvironmentFilter(a_event, a_filter),
+                        a_filter.isNot);
                 };
             return a_requireAll ?
                 std::ranges::all_of(a_filters, predicate) :
@@ -486,7 +514,10 @@ namespace WIYT
                     return IsFilterAllowedForScope(
                         a_scope,
                         a_requirement.activity,
-                        a_filter.type);
+                        a_filter.type) &&
+                        (a_filter.type != "City Status" ||
+                            (a_filter.optionMode >= 0 &&
+                             a_filter.optionMode <= 1));
                 });
         }
 

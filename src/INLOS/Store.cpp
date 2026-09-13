@@ -79,6 +79,29 @@ namespace INLOS
             return false;
         }
 
+        bool EnsureColumn(
+            sqlite3* a_db,
+            const std::string_view a_table,
+            const std::string_view a_column,
+            const std::string_view a_definition)
+        {
+            Statement statement;
+            if (!Prepare(a_db,
+                    std::format("SELECT 1 FROM pragma_table_info('{}') WHERE name=?1", a_table),
+                    statement,
+                    "inspect column")) {
+                return false;
+            }
+            sqlite3_bind_text(statement.handle, 1, a_column.data(),
+                static_cast<int>(a_column.size()), SQLITE_TRANSIENT);
+            if (sqlite3_step(statement.handle) == SQLITE_ROW) {
+                return true;
+            }
+            return Exec(a_db,
+                std::format("ALTER TABLE {} ADD COLUMN {} {}", a_table, a_column, a_definition),
+                "add column");
+        }
+
         bool OpenDatabase(
             const std::filesystem::path& a_path,
             Database& a_db,
@@ -191,7 +214,8 @@ namespace INLOS
                         filter.optionValue << ':' << filter.optionText << ':' <<
                         static_cast<int>(filter.actorValueMode) << ':' <<
                         static_cast<int>(filter.comparison) << ':' <<
-                        filter.minimumValue << ':' << filter.maximumValue;
+                        filter.minimumValue << ':' << filter.maximumValue << ':' <<
+                        filter.isNot;
                 }
             };
             appendFilters(rule.targetFilters);
@@ -341,6 +365,7 @@ CREATE TABLE IF NOT EXISTS rule_filters(
     comparison INTEGER NOT NULL,
     minimum_value REAL NOT NULL,
     maximum_value REAL NOT NULL,
+    is_not INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1)),
     PRIMARY KEY(rule_id, version, scope, position),
     FOREIGN KEY(rule_id, version)
         REFERENCES rule_versions(rule_id, version) ON DELETE CASCADE
@@ -535,6 +560,10 @@ CREATE TABLE IF NOT EXISTS rewards(
         if (!OpenDatabase(databasePath, database, false)) {
             return false;
         }
+        if (!EnsureColumn(database.handle, "rule_filters", "is_not",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1))")) {
+            return false;
+        }
 
         Statement metadata;
         if (!Prepare(
@@ -631,7 +660,7 @@ CREATE TABLE IF NOT EXISTS rewards(
                     database.handle,
                     "SELECT scope,type,form_id,editor_id,actor_value_name,"
                     "option_mode,option_value,option_text,actor_value_mode,"
-                    "comparison,minimum_value,maximum_value "
+                    "comparison,minimum_value,maximum_value,is_not "
                     "FROM rule_filters WHERE rule_id=?1 AND version=?2 "
                     "ORDER BY scope,position",
                     filters,
@@ -658,6 +687,7 @@ CREATE TABLE IF NOT EXISTS rewards(
                     sqlite3_column_double(filters.handle, 10));
                 filter.maximumValue = static_cast<float>(
                     sqlite3_column_double(filters.handle, 11));
+                filter.isNot = sqlite3_column_int(filters.handle, 12) != 0;
                 (scope == 0 ? rule.targetFilters : rule.blacklistFilters)
                     .push_back(std::move(filter));
             }
@@ -809,7 +839,7 @@ CREATE TABLE IF NOT EXISTS rewards(
         if (!Prepare(
                 database.handle,
                 "INSERT INTO rule_filters VALUES("
-                "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
                 filterStatement,
                 "save filters")) {
             rollback();
@@ -847,6 +877,8 @@ CREATE TABLE IF NOT EXISTS rewards(
                     filterStatement.handle, 14, filter.minimumValue);
                 sqlite3_bind_double(
                     filterStatement.handle, 15, filter.maximumValue);
+                sqlite3_bind_int(
+                    filterStatement.handle, 16, filter.isNot ? 1 : 0);
                 if (sqlite3_step(filterStatement.handle) != SQLITE_DONE) {
                     return false;
                 }
@@ -1093,6 +1125,7 @@ CREATE TABLE IF NOT EXISTS rewards(
     {
         std::scoped_lock lock(_lock);
         LootRule rule;
+        rule.destination = Destination::kPlayer;
         rule.criteria.id = GenerateUUID();
         rule.criteria.packageID =
             std::ranges::any_of(

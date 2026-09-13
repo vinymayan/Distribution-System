@@ -117,6 +117,7 @@ namespace
             type == "Cell" ||
             type == "Worldspace" ||
             type == "Cell Type" ||
+            type == "City Status" ||
             type == "Location Keyword" ||
             type == "Quest" ||
             type == "Relationship Rank" ||
@@ -131,6 +132,7 @@ namespace
             type == "NPC Trait" ||
             type == "Relationship Rank" ||
             type == "Cell Type" ||
+            type == "City Status" ||
             type == "Equipped Category" ||
             type == "Height" ||
             type == "Weight";
@@ -308,7 +310,7 @@ RuleDependencyMask GetFilterDependencyMask(std::string_view a_type)
     }
     if (a_type == "Location" || a_type == "Cell" ||
         a_type == "Worldspace" || a_type == "Cell Type" ||
-        a_type == "Location Keyword") {
+        a_type == "City Status" || a_type == "Location Keyword") {
         return ToMask(RuleDependency::kEnvironment);
     }
     if (a_type == "Quest" || a_type == "NPC Trait") {
@@ -464,6 +466,7 @@ namespace {
         AddInt(obj, alloc, "comparison", static_cast<int>(p.comparison));
         AddFloat(obj, alloc, "minimumValue", p.minimumValue);
         AddFloat(obj, alloc, "maximumValue", p.maximumValue);
+        AddBool(obj, alloc, "isNot", p.isNot);
         return obj;
     }
 
@@ -482,6 +485,7 @@ namespace {
             GetInt(value, "comparison", 0), 0, 3));
         p.minimumValue = GetFloat(value, "minimumValue", 0.0f);
         p.maximumValue = GetFloat(value, "maximumValue", 0.0f);
+        p.isNot = GetBool(value, "isNot", false);
         NormalizeNumericValueFilter(p);
         return p;
     }
@@ -870,6 +874,11 @@ bool ValidateRuleDefinition(const Rule& rule, std::string& error)
             error = std::format(
                 "invalid Actor Value filter '{}'",
                 filter.actorValueName);
+            return false;
+        }
+        if (filter.type == "City Status" &&
+            (filter.optionMode < 0 || filter.optionMode > 1)) {
+            error = "City Status must be Inside a City or Outside a City";
             return false;
         }
         const auto* descriptor =
@@ -2711,7 +2720,8 @@ void RuleManager::RebuildDependencyIndex(const bool invalidateActorSnapshots)
 
         for (const auto& filter : rule.targetFilters) {
             mask |= addFilter(rule, filter);
-            if (filter.type == "Gold" || filter.type == "Leveled NPC" ||
+            if (filter.isNot || filter.type == "City Status" ||
+                filter.type == "Gold" || filter.type == "Leveled NPC" ||
                 (!IsNonFormFilterType(filter.type) && ResolveEDFFormID(
                     filter.type, filter.editorID, filter.formIDStr) == 0)) {
                 _broadFullEvaluationRules.insert(rule.id);
@@ -2719,6 +2729,9 @@ void RuleManager::RebuildDependencyIndex(const bool invalidateActorSnapshots)
         }
         for (const auto& filter : rule.blacklistFilters) {
             mask |= addFilter(rule, filter);
+            if (filter.isNot) {
+                _broadFullEvaluationRules.insert(rule.id);
+            }
         }
         for (const auto& group : rule.rewardGroups) {
             for (const auto& reward : group.rewards) {
@@ -2803,6 +2816,9 @@ void RuleManager::RebuildDependencyIndex(const bool invalidateActorSnapshots)
                 ResolveActorValue(a_filter.actorValueName) !=
                     producedActorValue) {
                 return false;
+            }
+            if (a_filter.isNot) {
+                return true;
             }
             if (a_reward.numericSource != NumericRewardSource::kFixed ||
                 a_reward.numericOperation == NumericRewardOperation::kPercent) {
@@ -2913,17 +2929,29 @@ void RuleManager::RebuildDependencyIndex(const bool invalidateActorSnapshots)
                             if (!consumer) {
                                 continue;
                             }
-                            const bool isNegative = std::ranges::any_of(
+                            const bool normalBlacklist = std::ranges::any_of(
                                 consumer->blacklistFilters,
                                 [&](const BlacklistFilter& a_filter) {
-                                    return (GetFilterDependencyMask(a_filter.type) &
+                                    return !a_filter.isNot &&
+                                        (GetFilterDependencyMask(a_filter.type) &
                                                 bit) != 0 &&
                                         ResolveEDFFormID(
                                             a_filter.type,
                                             a_filter.editorID,
                                             a_filter.formIDStr) == formID;
                                 });
-                            if (isNegative) {
+                            const bool negatedTarget = std::ranges::any_of(
+                                consumer->targetFilters,
+                                [&](const BlacklistFilter& a_filter) {
+                                    return a_filter.isNot &&
+                                        (GetFilterDependencyMask(a_filter.type) &
+                                                bit) != 0 &&
+                                        ResolveEDFFormID(
+                                            a_filter.type,
+                                            a_filter.editorID,
+                                            a_filter.formIDStr) == formID;
+                                });
+                            if (normalBlacklist || negatedTarget) {
                                 negativeEdges.emplace(producer.id, consumerID);
                             }
                         }

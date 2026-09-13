@@ -355,6 +355,10 @@ void Manager::PopulateSpecialFilterLists()
         { "Interior", "Interior" },
         { "Exterior", "Exterior" }
     });
+    setPseudoList("City Status", {
+        { "InsideCity", "Inside a City" },
+        { "OutsideCity", "Outside a City" }
+    });
     setPseudoList("Equipped Category", {
         { "Unarmed", "Unarmed" },
         { "AnyWeapon", "Any Weapon" },

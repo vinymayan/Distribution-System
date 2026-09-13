@@ -519,6 +519,10 @@ namespace SPIDUI {
             filter.optionMode =
                 item.editorID == "Exterior" ? 1 : 0;
         }
+        else if (item.formType == "City Status") {
+            filter.optionMode =
+                item.editorID == "OutsideCity" ? 1 : 0;
+        }
         else if (item.formType == "Equipped Category") {
             static const std::array names{
                 "Unarmed", "AnyWeapon", "OneHanded", "TwoHanded",
@@ -559,6 +563,12 @@ namespace SPIDUI {
     {
         if (filter.type == "Height" || filter.type == "Weight") {
             return filter.type.c_str();
+        }
+        if (filter.type == "City Status") {
+            return filter.optionMode ==
+                    static_cast<int>(CityStatusFilter::kOutsideCity) ?
+                GetLoc("auto.outside_a_city", "Outside a City") :
+                GetLoc("auto.inside_a_city", "Inside a City");
         }
         if (!filter.optionText.empty()) {
             return filter.optionText.c_str();
@@ -787,6 +797,25 @@ namespace SPIDUI {
             }
             return;
         }
+        if (filter.type == "City Status") {
+            const char* options[] = {
+                GetLoc("auto.inside_a_city", "Inside a City"),
+                GetLoc("auto.outside_a_city", "Outside a City")
+            };
+            filter.optionMode = std::clamp(filter.optionMode, 0, 1);
+            ImGuiMCP::SetNextItemWidth(170.0f);
+            if (ImGuiMCP::BeginCombo(
+                    "##CityStatus", options[filter.optionMode])) {
+                for (int option = 0; option < 2; ++option) {
+                    if (ImGuiMCP::Selectable(
+                            options[option], filter.optionMode == option)) {
+                        filter.optionMode = option;
+                    }
+                }
+                ImGuiMCP::EndCombo();
+            }
+            return;
+        }
         ImGuiMCP::TextDisabled("-");
     }
 
@@ -824,9 +853,12 @@ namespace SPIDUI {
             ImGuiMCP::ImGuiTableFlags_Borders |
             ImGuiMCP::ImGuiTableFlags_RowBg |
             ImGuiMCP::ImGuiTableFlags_Resizable;
-        if (!ImGuiMCP::BeginTable(tableID, 8, tableFlags)) {
+        if (!ImGuiMCP::BeginTable(tableID, 9, tableFlags)) {
             return;
         }
+        ImGuiMCP::TableSetupColumn(
+            GetLoc("auto.filter_operator", "Match"),
+            ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 100.0f);
         ImGuiMCP::TableSetupColumn(
             GetLoc("auto.actor_value", "Actor Value"),
             ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 330.0f);
@@ -872,6 +904,9 @@ namespace SPIDUI {
             ImGuiMCP::PushID(static_cast<int>(index));
             ImGuiMCP::TableNextRow();
             ImGuiMCP::TableSetColumnIndex(0);
+            DistributionCore::UI::DrawFilterOperator(
+                "##FilterOperator", filter);
+            ImGuiMCP::TableSetColumnIndex(1);
             char nameBuffer[128]{};
             strncpy_s(
                 nameBuffer,
@@ -885,7 +920,7 @@ namespace SPIDUI {
                 filter.actorValueName = nameBuffer;
             }
 
-            ImGuiMCP::TableSetColumnIndex(1);
+            ImGuiMCP::TableSetColumnIndex(2);
             ImGuiMCP::SetNextItemWidth(-1.0f);
             DrawLocalizedSearchableCombo(
                 "##KnownActorValue",
@@ -898,7 +933,7 @@ namespace SPIDUI {
                 filter.actorValueName,
                 1);
 
-            ImGuiMCP::TableSetColumnIndex(2);
+            ImGuiMCP::TableSetColumnIndex(3);
             auto mode = std::clamp(
                 static_cast<int>(filter.actorValueMode), 0, 2);
             ImGuiMCP::SetNextItemWidth(-1.0f);
@@ -922,7 +957,7 @@ namespace SPIDUI {
                 ImGuiMCP::EndCombo();
             }
 
-            ImGuiMCP::TableSetColumnIndex(3);
+            ImGuiMCP::TableSetColumnIndex(4);
             auto comparison = std::clamp(
                 static_cast<int>(filter.comparison), 0, 3);
             ImGuiMCP::SetNextItemWidth(-1.0f);
@@ -940,7 +975,7 @@ namespace SPIDUI {
                 ImGuiMCP::EndCombo();
             }
 
-            ImGuiMCP::TableSetColumnIndex(4);
+            ImGuiMCP::TableSetColumnIndex(5);
             ImGuiMCP::SetNextItemWidth(-1.0f);
             ImGuiMCP::InputFloat(
                 "##ActorValueMinimum",
@@ -949,7 +984,7 @@ namespace SPIDUI {
                 0.0f,
                 "%.2f");
 
-            ImGuiMCP::TableSetColumnIndex(5);
+            ImGuiMCP::TableSetColumnIndex(6);
             if (filter.comparison == NumericComparison::kBetween) {
                 ImGuiMCP::SetNextItemWidth(-1.0f);
                 ImGuiMCP::InputFloat(
@@ -963,7 +998,7 @@ namespace SPIDUI {
                 ImGuiMCP::TextDisabled("-");
             }
 
-            ImGuiMCP::TableSetColumnIndex(6);
+            ImGuiMCP::TableSetColumnIndex(7);
             if (IsActorValueFilterValid(filter)) {
                 ImGuiMCP::TextColored(
                     { 0.3f, 0.9f, 0.4f, 1.0f },
@@ -977,7 +1012,7 @@ namespace SPIDUI {
                     GetLoc("auto.invalid", "INVALID"));
             }
 
-            ImGuiMCP::TableSetColumnIndex(7);
+            ImGuiMCP::TableSetColumnIndex(8);
             if (ImGuiMCP::Button("X##ActorValue")) {
                 a_filters.erase(a_filters.begin() + index);
                 ImGuiMCP::PopID();
@@ -996,7 +1031,7 @@ namespace SPIDUI {
         "Hair", "Facial Hair", "HeadPart Misc", "HeadPart Face",
         "HeadPart Eyes", "HeadPart Scar", "HeadPart Eyebrows", "Leveled NPC",
         "Source Plugin", "NPC Trait", "Quest", "Relationship Rank",
-        "Worldspace", "Cell Type", "Location Keyword", "Equipped Category"
+        "Worldspace", "Cell Type", "City Status", "Location Keyword", "Equipped Category"
         };
 
         ImGuiMCP::Text(GetLoc("auto.active_filters", "Active Filters:"));
@@ -1291,7 +1326,8 @@ namespace SPIDUI {
             filters.push_back(std::move(filter));
         }
 
-        if (ImGuiMCP::BeginTable(tableName, 5, ImGuiMCP::ImGuiTableFlags_Borders)) {
+        if (ImGuiMCP::BeginTable(tableName, 6, ImGuiMCP::ImGuiTableFlags_Borders)) {
+            ImGuiMCP::TableSetupColumn(GetLoc("auto.filter_operator", "Match"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 100.0f);
             ImGuiMCP::TableSetupColumn(GetLoc("auto.type", "Type"), ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 120.0f);
             ImGuiMCP::TableSetupColumn(GetLoc("auto.name", "Name"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
             ImGuiMCP::TableSetupColumn(GetLoc("auto.condition", "Condition"), ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
@@ -1305,14 +1341,17 @@ namespace SPIDUI {
                 }
                 ImGuiMCP::TableNextRow();
                 ImGuiMCP::PushID(i);
-                ImGuiMCP::TableSetColumnIndex(0); ImGuiMCP::Text(f.type.c_str());
-                ImGuiMCP::TableSetColumnIndex(1);
+                ImGuiMCP::TableSetColumnIndex(0);
+                DistributionCore::UI::DrawFilterOperator("##FilterOperator", f);
+                ImGuiMCP::TableSetColumnIndex(1); ImGuiMCP::Text(f.type.c_str());
+                ImGuiMCP::TableSetColumnIndex(2);
                 std::string resolvedName = "Not Found";
 
                 if (f.type == "Source Plugin" ||
                     f.type == "NPC Trait" ||
                     f.type == "Relationship Rank" ||
                     f.type == "Cell Type" ||
+                    f.type == "City Status" ||
                     f.type == "Equipped Category" ||
                     f.type == "Height" ||
                     f.type == "Weight") {
@@ -1336,14 +1375,14 @@ namespace SPIDUI {
                     }
                 }
                 ImGuiMCP::TextUnformatted(resolvedName.c_str());
-                ImGuiMCP::TableSetColumnIndex(2);
-                RenderFilterCondition(f);
                 ImGuiMCP::TableSetColumnIndex(3);
+                RenderFilterCondition(f);
+                ImGuiMCP::TableSetColumnIndex(4);
                 ImGuiMCP::TextUnformatted(
                     f.type == "Source Plugin" ?
                         f.optionText.c_str() :
                         f.formIDStr.c_str());
-                ImGuiMCP::TableSetColumnIndex(4);
+                ImGuiMCP::TableSetColumnIndex(5);
 
                 // Usamos o prefixo para evitar conflitos de ID no ImGui
                 if (ImGuiMCP::Button((idPrefix + std::to_string(i)).c_str())) {
@@ -1415,7 +1454,7 @@ namespace SPIDUI {
                 "Gold", "Equipped Item", "Hair", "Facial Hair", "HeadPart Misc",
                 "HeadPart Face", "HeadPart Eyes", "HeadPart Scar", "HeadPart Eyebrows",
                 "Leveled NPC", "Source Plugin", "NPC Trait", "Quest",
-                "Relationship Rank", "Worldspace", "Cell Type",
+                "Relationship Rank", "Worldspace", "Cell Type", "City Status",
                 "Location Keyword", "Equipped Category"
             };
         std::vector<SearchableComboOption> typeOptions;
@@ -1464,7 +1503,7 @@ namespace SPIDUI {
                         "Hair", "Facial Hair", "HeadPart Misc", "HeadPart Face",
                         "HeadPart Eyes", "HeadPart Scar", "HeadPart Eyebrows", "Leveled NPC",
                         "Source Plugin", "NPC Trait", "Quest", "Relationship Rank",
-                        "Worldspace", "Cell Type", "Location Keyword", "Equipped Category"
+                        "Worldspace", "Cell Type", "City Status", "Location Keyword", "Equipped Category"
                         }) {
                         auto& l = Manager::GetSingleton()->GetList(type);
                         filterAllCache.insert(filterAllCache.end(), l.begin(), l.end());

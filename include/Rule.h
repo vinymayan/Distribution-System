@@ -166,7 +166,19 @@ struct BlacklistFilter {
     NumericComparison comparison = NumericComparison::kGreaterOrEqual;
     float minimumValue = 0.0f;
     float maximumValue = 0.0f;
+    bool isNot = false;
 };
+
+[[nodiscard]] constexpr bool ApplyFilterOperator(
+    const bool a_matches,
+    const bool a_isNot) noexcept
+{
+    return a_isNot ? !a_matches : a_matches;
+}
+
+static_assert(ApplyFilterOperator(true, false));
+static_assert(!ApplyFilterOperator(true, true));
+static_assert(ApplyFilterOperator(false, true));
 
 enum class NPCTraitFilter : int {
     kUnique = 0,
@@ -187,6 +199,11 @@ enum class QuestFilterMode : int {
 enum class CellTypeFilter : int {
     kInterior = 0,
     kExterior = 1
+};
+
+enum class CityStatusFilter : int {
+    kInsideCity = 0,
+    kOutsideCity = 1
 };
 
 enum class EquippedCategoryFilter : int {

@@ -6,11 +6,15 @@
 #include "INLOS/NewSkillMenu.h"
 #include "INLOS/Store.h"
 #include "INLOS/Settings.h"
+#include "WhoEditThatAPI.h"
 
 #include <ClibUtil/editorID.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <limits>
 #include <random>
 
 namespace INLOS
@@ -96,6 +100,112 @@ namespace INLOS
             }
             const auto name = std::string(a_name);
             return RE::ActorValueList::LookupActorValueByName(name.c_str());
+        }
+
+        bool IsVanillaSkill(const RE::ActorValue a_actorValue)
+        {
+            return a_actorValue >= RE::ActorValue::kOneHanded &&
+                a_actorValue <= RE::ActorValue::kEnchanting;
+        }
+
+        WhoEditThat::API::IWhoEditThatAPI* GetINLOSLedger(
+            WhoEditThat::API::ClientHandle& a_client)
+        {
+            static auto* api = WhoEditThat::API::GetAPI();
+            if (!api) {
+                api = WhoEditThat::API::GetAPI();
+            }
+            if (!api || !api->IsReady()) {
+                return nullptr;
+            }
+            if (a_client == WhoEditThat::API::kInvalidClient) {
+                WhoEditThat::API::ClientRegistration registration;
+                registration.clientID = "viny.inlos";
+                registration.displayName = "INLOS";
+                a_client = api->RegisterClient(
+                    std::addressof(registration));
+            }
+            return a_client == WhoEditThat::API::kInvalidClient ?
+                nullptr : api;
+        }
+
+        void LogINLOSLedgerResult(
+            const WhoEditThat::API::Result* a_result,
+            void*)
+        {
+            if (!a_result) {
+                return;
+            }
+            if (a_result->status == WhoEditThat::API::Status::kSuccess) {
+                logger::debug(
+                    "[INLOS] Skill bonus recorded by WhoEditThat: "
+                    "actor={:08X} key='{}' value='{}' delta={:+.3f}.",
+                    a_result->actorFormID,
+                    a_result->mutationKey,
+                    a_result->actorValue,
+                    a_result->appliedDelta);
+                return;
+            }
+            logger::warn(
+                "[INLOS] WhoEditThat rejected skill bonus: "
+                "actor={:08X} status={} message='{}'.",
+                a_result->actorFormID,
+                std::to_underlying(a_result->status),
+                a_result->message);
+        }
+
+        bool QueueVanillaSkillBonus(
+            RE::Actor* a_actor,
+            const RE::ActorValue a_skill,
+            const int a_amount)
+        {
+            static WhoEditThat::API::ClientHandle client =
+                WhoEditThat::API::kInvalidClient;
+            static std::atomic<std::uint64_t> sequence{ 0 };
+            static const auto sessionID = static_cast<std::uint64_t>(
+                std::chrono::system_clock::now().time_since_epoch().count());
+            auto* api = GetINLOSLedger(client);
+            const auto* skillName =
+                RE::ActorValueList::GetActorValueName(a_skill);
+            if (!a_actor || !api || !skillName || !*skillName ||
+                a_amount == 0) {
+                return false;
+            }
+
+            const auto mutationKey = std::format(
+                "loot/skill/{:016X}/{:016X}",
+                sessionID,
+                sequence.fetch_add(1, std::memory_order_relaxed));
+            WhoEditThat::API::ActorValueContributionRequest request;
+            request.client = client;
+            request.actorFormID = a_actor->GetFormID();
+            request.mutationKey = mutationKey.c_str();
+            request.targetActorValue = skillName;
+            request.operation = WhoEditThat::API::NumericOperation::kFlat;
+            request.source = WhoEditThat::API::NumericSource::kFixed;
+            request.channel = WhoEditThat::API::ModifierChannel::kPermanent;
+            request.fixedValue = static_cast<float>(a_amount);
+            return api->QueueUpsertActorValue(
+                std::addressof(request),
+                LogINLOSLedgerResult,
+                nullptr);
+        }
+
+        bool AddVanillaPerkPoints(RE::Actor* a_actor, const int a_amount)
+        {
+            if (!a_actor || !a_actor->IsPlayerRef() || a_amount == 0) {
+                return false;
+            }
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (!player) {
+                return false;
+            }
+            const auto current = static_cast<int>(
+                player->GetPlayerRuntimeData().perkCount);
+            player->GetPlayerRuntimeData().perkCount =
+                static_cast<std::uint8_t>(
+                    std::clamp(current + a_amount, 0, 255));
+            return true;
         }
 
         bool IsHumanoid(RE::Actor* a_actor, RE::TESNPC* a_npc)
@@ -673,6 +783,10 @@ namespace INLOS
                         filter.type);
                     return false;
                 }
+                if (filter.type == "City Status" &&
+                    (filter.optionMode < 0 || filter.optionMode > 1)) {
+                    return false;
+                }
             }
             for (const auto& filter : rule.blacklistFilters) {
                 if (!DistributionCore::FilterRegistry().Supports(
@@ -681,6 +795,10 @@ namespace INLOS
                         "[INLOS] Rule '{}' uses unsupported blacklist filter '{}'.",
                         rule.name,
                         filter.type);
+                    return false;
+                }
+                if (filter.type == "City Status" &&
+                    (filter.optionMode < 0 || filter.optionMode > 1)) {
                     return false;
                 }
             }
@@ -914,11 +1032,9 @@ namespace INLOS
             }
             const auto nonPhysicalReward =
                 a_reward.typeReward == "Experience" ||
-                a_reward.typeReward == "Skill Experience" ||
-                a_reward.typeReward ==
-                    "NSM Skill Experience" ||
-                a_reward.typeReward == "NSM Skill Bonus" ||
-                a_reward.typeReward == "NSM Perk Points" ||
+                a_reward.typeReward == "Skill XP" ||
+                a_reward.typeReward == "Skill Level" ||
+                a_reward.typeReward == "Perk Points" ||
                 a_reward.typeReward == "NSM Resource";
             auto* progressionReceiver =
                 nonPhysicalReward ?
@@ -949,37 +1065,32 @@ namespace INLOS
                     State::GetSingleton()->GetExperience());
                 return;
             }
-            if (a_reward.typeReward == "Skill Experience") {
-                if (!progressionReceiver->IsPlayerRef()) {
-                    logger::debug(
-                        "[INLOS] Vanilla skill experience is player-only; "
-                        "receiver {:08X} was ignored.",
-                        progressionReceiver->GetFormID());
-                    return;
-                }
-                const auto actorValue =
-                    ResolveActorValue(a_reward.editorID);
-                if (actorValue != RE::ActorValue::kNone) {
-                    player->AddSkillExperience(
-                        actorValue,
-                        static_cast<float>(a_reward.amount) *
-                            Settings::GetSingleton()->
-                                experienceMultiplier);
-                }
-                return;
-            }
-            if (a_reward.typeReward ==
-                "NSM Skill Experience") {
+            if (a_reward.typeReward == "Skill XP") {
+                const auto source = GetSkillSource(a_reward.editorID);
+                const auto skillID = GetSkillID(a_reward.editorID);
                 const auto amount =
                     static_cast<float>(a_reward.amount) *
                     Settings::GetSingleton()->
                         experienceMultiplier;
-                if (!NewSkillMenu::AddSkillExperience(
-                        progressionReceiver->GetFormID(),
-                        a_reward.editorID,
-                        amount)) {
+                if (source == SkillSource::kVanilla) {
+                    const auto actorValue = ResolveActorValue(skillID);
+                    if (!progressionReceiver->IsPlayerRef()) {
+                        logger::debug(
+                            "[INLOS] Vanilla skill XP is player-only; "
+                            "receiver {:08X} was ignored.",
+                            progressionReceiver->GetFormID());
+                    } else if (IsVanillaSkill(actorValue)) {
+                        player->AddSkillExperience(actorValue, amount);
+                    } else {
+                        logger::warn(
+                            "[INLOS] Vanilla skill '{}' is invalid.",
+                            skillID);
+                    }
+                } else if (source != SkillSource::kNSM ||
+                    !NewSkillMenu::AddSkillExperience(
+                        progressionReceiver->GetFormID(), skillID, amount)) {
                     logger::warn(
-                        "[INLOS] Could not give {} XP to NSM skill '{}' "
+                        "[INLOS] Could not give {} XP to skill '{}' "
                         "for actor {:08X}.",
                         amount,
                         a_reward.editorID,
@@ -987,28 +1098,60 @@ namespace INLOS
                 }
                 return;
             }
-            if (a_reward.typeReward == "NSM Skill Bonus") {
-                if (!NewSkillMenu::AddSkillBonus(
-                        progressionReceiver->GetFormID(),
-                        a_reward.editorID,
-                        static_cast<int>(a_reward.amount))) {
+            if (a_reward.typeReward == "Skill Level") {
+                const auto source = GetSkillSource(a_reward.editorID);
+                const auto skillID = GetSkillID(a_reward.editorID);
+                const auto amount = static_cast<int>(std::min<std::uint32_t>(
+                    a_reward.amount,
+                    static_cast<std::uint32_t>(
+                        std::numeric_limits<int>::max())));
+                const auto mode = static_cast<SkillLevelMode>(
+                    a_reward.functionOnType);
+                bool applied = false;
+                if (source == SkillSource::kVanilla) {
+                    const auto actorValue = ResolveActorValue(skillID);
+                    if (IsVanillaSkill(actorValue)) {
+                        if (mode == SkillLevelMode::kBonus) {
+                            applied = QueueVanillaSkillBonus(
+                                progressionReceiver, actorValue, amount);
+                        } else if (auto* owner =
+                                       progressionReceiver->AsActorValueOwner()) {
+                            owner->SetBaseActorValue(
+                                actorValue,
+                                owner->GetBaseActorValue(actorValue) + amount);
+                            applied = true;
+                        }
+                    }
+                } else if (source == SkillSource::kNSM) {
+                    applied = mode == SkillLevelMode::kBonus ?
+                        NewSkillMenu::AddSkillBonus(
+                            progressionReceiver->GetFormID(), skillID, amount) :
+                        NewSkillMenu::AddSkillLevel(
+                            progressionReceiver->GetFormID(), skillID, amount);
+                }
+                if (!applied) {
                     logger::warn(
-                        "[INLOS] Could not add {} bonus levels to NSM "
-                        "skill '{}' for actor {:08X}.",
-                        a_reward.amount,
+                        "[INLOS] Could not add {} {} levels to skill '{}' "
+                        "for actor {:08X}.",
+                        amount,
+                        mode == SkillLevelMode::kBonus ? "bonus" : "base",
                         a_reward.editorID,
                         progressionReceiver->GetFormID());
                 }
                 return;
             }
-            if (a_reward.typeReward == "NSM Perk Points") {
+            if (a_reward.typeReward == "Perk Points") {
+                const auto amount = static_cast<int>(std::min<std::uint32_t>(
+                    a_reward.amount,
+                    static_cast<std::uint32_t>(
+                        std::numeric_limits<int>::max())));
                 if (!NewSkillMenu::AddPerkPoints(
-                        progressionReceiver->GetFormID(),
-                        static_cast<int>(a_reward.amount))) {
+                        progressionReceiver->GetFormID(), amount) &&
+                    !AddVanillaPerkPoints(progressionReceiver, amount)) {
                     logger::warn(
-                        "[INLOS] Could not add {} NSM perk points "
+                        "[INLOS] Could not add {} perk points "
                         "for actor {:08X}.",
-                        a_reward.amount,
+                        amount,
                         progressionReceiver->GetFormID());
                 }
                 return;

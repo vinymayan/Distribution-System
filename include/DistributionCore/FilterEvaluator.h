@@ -10,7 +10,8 @@ namespace DistributionCore
     {
         kNotHandled = 0,
         kNoMatch = 1,
-        kMatch = 2
+        kMatch = 2,
+        kInvalid = 3
     };
 
     struct FilterEvaluationServices
@@ -28,4 +29,6 @@ namespace DistributionCore
         RE::TESNPC* a_npc,
         const BlacklistFilter& a_filter,
         const FilterEvaluationServices& a_services);
+
+    [[nodiscard]] bool IsCityLocation(RE::BGSLocation* a_location);
 }

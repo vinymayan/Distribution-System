@@ -4560,6 +4560,7 @@ RuleEvaluationPhase GetFilterEvaluationPhase(const std::string& a_type)
     }
     if (a_type == "Location" || a_type == "Cell" ||
         a_type == "Worldspace" || a_type == "Cell Type" ||
+        a_type == "City Status" ||
         a_type == "Location Keyword") {
         return RuleEvaluationPhase::kEnvironment;
     }

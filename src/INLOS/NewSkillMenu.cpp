@@ -1,4 +1,5 @@
 #include "INLOS/NewSkillMenu.h"
+#include "SkillMenuAPI.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,82 +11,17 @@ namespace INLOS::NewSkillMenu
 {
     namespace
     {
-        constexpr std::uint32_t kRequiredVersion = 5;
-
-        struct SkillListView
-        {
-            const char* const* items;
-            std::uint32_t count;
-        };
-
-        struct Interface
-        {
-            std::uint32_t interfaceVersion;
-            int (*GetCustomSkillLevel)(const char*);
-            void (*AddCustomSkillXP)(const char*, float);
-            float (*GetCustomSkillXP)(const char*);
-            float (*GetSkillFormulaValue)(const char*, int);
-            int (*GetCustomSkillTotalLevel)(const char*);
-            int (*GetCustomSkillBonus)(const char*);
-            void (*ModCustomSkillBonus)(const char*, int);
-            void (*SetCustomSkillBonus)(const char*, int);
-            void (*AddCustomSkillXPForActor)(
-                RE::FormID,
-                const char*,
-                float);
-            int (*GetCustomSkillLevelForActor)(
-                RE::FormID,
-                const char*);
-            float (*GetCustomSkillXPForActor)(
-                RE::FormID,
-                const char*);
-            int (*GetCustomSkillTotalLevelForActor)(
-                RE::FormID,
-                const char*);
-            int (*GetCustomSkillBonusForActor)(
-                RE::FormID,
-                const char*);
-            void (*ModCustomSkillBonusForActor)(
-                RE::FormID,
-                const char*,
-                int);
-            void (*SetCustomSkillBonusForActor)(
-                RE::FormID,
-                const char*,
-                int);
-            bool (*HasCustomPerkForActor)(
-                RE::FormID,
-                const char*);
-            bool (*AddCustomPerkForActor)(
-                RE::FormID,
-                const char*);
-            bool (*RemoveCustomPerkForActor)(
-                RE::FormID,
-                const char*);
-            int (*GetActorPerkPoints)(RE::FormID);
-            int (*ModActorPerkPoints)(RE::FormID, int);
-            float (*GetActorResource)(
-                RE::FormID,
-                const char*);
-            bool (*ModActorResource)(
-                RE::FormID,
-                const char*,
-                float);
-            SkillListView (*GetAvailableSkills)();
-            SkillListView (*GetAvailableResources)();
-        };
-
         using GetInterface = void* (*)();
 
         std::mutex g_lock;
-        Interface* g_interface = nullptr;
+        SkillMenuAPI::Interface* g_interface = nullptr;
         std::vector<std::string> g_skills;
         std::vector<std::string> g_resources;
         std::chrono::steady_clock::time_point g_nextSkillRefresh{};
         std::chrono::steady_clock::time_point g_nextResourceRefresh{};
 
         std::vector<std::string> CopyListView(
-            const SkillListView a_view)
+            const SkillMenuAPI::SkillListView a_view)
         {
             std::vector<std::string> values;
             values.reserve(a_view.count);
@@ -116,7 +52,7 @@ namespace INLOS::NewSkillMenu
         {
             if (!g_interface ||
                 g_interface->interfaceVersion <
-                    kRequiredVersion ||
+                    SkillMenuAPI::Version ||
                 !g_interface->GetAvailableSkills) {
                 return false;
             }
@@ -135,7 +71,7 @@ namespace INLOS::NewSkillMenu
         {
             if (!g_interface ||
                 g_interface->interfaceVersion <
-                    kRequiredVersion ||
+                    SkillMenuAPI::Version ||
                 !g_interface->GetAvailableResources) {
                 return false;
             }
@@ -168,13 +104,13 @@ namespace INLOS::NewSkillMenu
             return false;
         }
         auto* candidate =
-            static_cast<Interface*>(getter());
+            static_cast<SkillMenuAPI::Interface*>(getter());
         if (!candidate ||
             candidate->interfaceVersion <
-                kRequiredVersion) {
+                SkillMenuAPI::Version) {
             logger::warn(
                 "[INLOS] New Skill Menu API v{} or newer is required.",
-                kRequiredVersion);
+                SkillMenuAPI::Version);
             return false;
         }
         g_interface = candidate;
@@ -309,6 +245,27 @@ namespace INLOS::NewSkillMenu
         }
         const std::string skillID(a_skillID);
         g_interface->ModCustomSkillBonusForActor(
+            a_actorID,
+            skillID.c_str(),
+            a_amount);
+        return true;
+    }
+
+    bool AddSkillLevel(
+        const RE::FormID a_actorID,
+        const std::string_view a_skillID,
+        const int a_amount)
+    {
+        if (a_amount == 0 || !HasSkill(a_skillID)) {
+            return false;
+        }
+        std::scoped_lock lock(g_lock);
+        if (!g_interface ||
+            !g_interface->ModCustomSkillLevelForActor) {
+            return false;
+        }
+        const std::string skillID(a_skillID);
+        g_interface->ModCustomSkillLevelForActor(
             a_actorID,
             skillID.c_str(),
             a_amount);

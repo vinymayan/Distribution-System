@@ -18,7 +18,7 @@ namespace
 {
     namespace fs = std::filesystem;
 
-    constexpr int SCHEMA_VERSION = 5;
+    constexpr int SCHEMA_VERSION = 6;
     constexpr std::string_view LEGACY_RULES_DIR = "Data/Viny Mods/EDF/Rules";
     constexpr std::string_view LEGACY_SKSE_RULES_DIR = "Data/SKSE/Plugins/EDF/Rules";
     constexpr std::string_view LEGACY_BACKUP_DIR = "Data/Viny Mods/EDF/Legacy Backup";
@@ -340,6 +340,7 @@ namespace
                 "numeric_comparison INTEGER NOT NULL DEFAULT 0 CHECK(numeric_comparison IN(0,1,2,3)),"
                 "minimum_value REAL NOT NULL DEFAULT 0,"
                 "maximum_value REAL NOT NULL DEFAULT 0,"
+                "is_not INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1)),"
                 "PRIMARY KEY(rule_id,version,scope,ordinal),"
                 "FOREIGN KEY(rule_id,version) REFERENCES rule_versions(rule_id,version) ON DELETE CASCADE"
                 ");",
@@ -418,6 +419,9 @@ namespace
                 db, "rule_filters", "option_text",
                 "TEXT NOT NULL DEFAULT ''", context) ||
             !EnsureColumn(
+                db, "rule_filters", "is_not",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1))", context) ||
+            !EnsureColumn(
                 db, "rule_versions", "actor_scope",
                 "INTEGER NOT NULL DEFAULT 0 CHECK(actor_scope IN(0,1,2))", context) ||
             !EnsureColumn(
@@ -467,7 +471,7 @@ namespace
         }
         if (!Exec(
                 db,
-                "UPDATE metadata SET value='5' WHERE key='schema_version';",
+                "UPDATE metadata SET value='6' WHERE key='schema_version';",
                 context)) {
             return false;
         }
@@ -497,7 +501,7 @@ namespace
         readMetadata.handle = nullptr;
         sqlite3_finalize(insertMetadata.handle);
         insertMetadata.handle = nullptr;
-        if (!Exec(db, "PRAGMA user_version=5;", context) ||
+        if (!Exec(db, "PRAGMA user_version=6;", context) ||
             !Exec(db, "COMMIT;", context)) {
             return false;
         }
@@ -603,8 +607,8 @@ namespace
                     "INSERT INTO rule_filters("
                     "rule_id,version,scope,ordinal,type,form_id,editor_id,"
                     "actor_value_name,option_mode,option_value,option_text,"
-                    "actor_value_mode,numeric_comparison,minimum_value,maximum_value"
-                    ") VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15);",
+                    "actor_value_mode,numeric_comparison,minimum_value,maximum_value,is_not"
+                    ") VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16);",
                     statement,
                     context)) {
                 return false;
@@ -635,6 +639,9 @@ namespace
                 sqlite3_bind_double(
                     statement.handle, 15,
                     filters[index].maximumValue);
+                sqlite3_bind_int(
+                    statement.handle, 16,
+                    filters[index].isNot ? 1 : 0);
                 if (sqlite3_step(statement.handle) != SQLITE_DONE) {
                     return false;
                 }
@@ -828,7 +835,7 @@ namespace
         if (!Prepare(db,
                 "SELECT scope,type,form_id,editor_id,actor_value_name,"
                 "option_mode,option_value,option_text,"
-                "actor_value_mode,numeric_comparison,minimum_value,maximum_value "
+                "actor_value_mode,numeric_comparison,minimum_value,maximum_value,is_not "
                 "FROM rule_filters "
                 "WHERE rule_id=?1 AND version=?2 ORDER BY scope,ordinal;",
                 filters,
@@ -855,6 +862,7 @@ namespace
                 sqlite3_column_double(filters.handle, 10));
             filter.maximumValue = static_cast<float>(
                 sqlite3_column_double(filters.handle, 11));
+            filter.isNot = sqlite3_column_int(filters.handle, 12) != 0;
             NormalizeNumericValueFilter(filter);
             if (scope == "target") {
                 rule.targetFilters.push_back(std::move(filter));

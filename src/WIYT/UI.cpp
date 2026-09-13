@@ -79,7 +79,7 @@ namespace WIYT::UI
                 return "The item, spell, quest, or form that originated the event.";
             case FilterScope::kEnvironment:
             default:
-                return "The Cell, Location, Worldspace, or Location Keyword where the event occurred.";
+                return "The city status, Cell, Location, Worldspace, or Location Keyword where the event occurred.";
             }
         }
 
@@ -101,7 +101,10 @@ namespace WIYT::UI
                         return IsFilterAllowedForScope(
                             a_scope,
                             a_requirement.activity,
-                            a_filter.type);
+                            a_filter.type) &&
+                            (a_filter.type != "City Status" ||
+                                (a_filter.optionMode >= 0 &&
+                                 a_filter.optionMode <= 1));
                     });
             };
             return valid(
@@ -310,6 +313,7 @@ namespace WIYT::UI
             }
             else if (filter.type == "NPC Trait" ||
                      filter.type == "Cell Type" ||
+                     filter.type == "City Status" ||
                      filter.type == "Equipped Category") {
                 filter.optionMode = std::max(
                     0,
@@ -412,6 +416,8 @@ namespace WIYT::UI
             const std::string_view a_stateID,
             bool& a_remove)
         {
+            DistributionCore::UI::DrawFilterOperator(
+                "Match", a_filter);
             const auto descriptors =
                 DistributionCore::FilterRegistry().AvailableFor(
                     DistributionCore::Domain::kWIYT);
@@ -435,8 +441,10 @@ namespace WIYT::UI
                     options,
                     selected,
                     options.size())) {
+                const auto isNot = a_filter.isNot;
                 a_filter = {};
                 a_filter.type = selected;
+                a_filter.isNot = isNot;
             }
             const auto* descriptor =
                 DistributionCore::FilterRegistry().Find(
@@ -1211,13 +1219,17 @@ namespace WIYT::UI
 
             if (!ImGuiMCP::BeginTable(
                     "WIYTFilters",
-                    6,
+                    7,
                     ImGuiMCP::ImGuiTableFlags_Borders |
                         ImGuiMCP::ImGuiTableFlags_RowBg |
                         ImGuiMCP::ImGuiTableFlags_Resizable |
                         ImGuiMCP::ImGuiTableFlags_ScrollY)) {
                 return;
             }
+            ImGuiMCP::TableSetupColumn(
+                "Match",
+                ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
+                100.0f);
             ImGuiMCP::TableSetupColumn(
                 "Type",
                 ImGuiMCP::ImGuiTableColumnFlags_WidthFixed,
@@ -1247,8 +1259,11 @@ namespace WIYT::UI
                 ImGuiMCP::PushID(static_cast<int>(index));
                 ImGuiMCP::TableNextRow();
                 ImGuiMCP::TableSetColumnIndex(0);
-                ImGuiMCP::TextUnformatted(filter.type.c_str());
+                DistributionCore::UI::DrawFilterOperator(
+                    "##FilterOperator", filter);
                 ImGuiMCP::TableSetColumnIndex(1);
+                ImGuiMCP::TextUnformatted(filter.type.c_str());
+                ImGuiMCP::TableSetColumnIndex(2);
                 const auto* descriptor =
                     DistributionCore::FilterRegistry().Find(
                         filter.type);
@@ -1277,11 +1292,14 @@ namespace WIYT::UI
                 else if (filter.type == "Height" || filter.type == "Weight") {
                     ImGuiMCP::TextUnformatted("NPC base value");
                 }
+                else if (filter.type == "City Status") {
+                    ImGuiMCP::TextUnformatted("Event location");
+                }
                 else {
                     ImGuiMCP::SetNextItemWidth(-1.0f);
                     InputString("##Option", filter.optionText);
                 }
-                ImGuiMCP::TableSetColumnIndex(2);
+                ImGuiMCP::TableSetColumnIndex(3);
                 if (descriptor &&
                     (descriptor->capabilities &
                         DistributionCore::ToMask(
@@ -1289,20 +1307,31 @@ namespace WIYT::UI
                                 kNumeric)) != 0) {
                     DrawNumericComparison(filter);
                 }
+                else if (filter.type == "City Status") {
+                    ImGuiMCP::SetNextItemWidth(170.0f);
+                    EnumCombo(
+                        "##CityStatus",
+                        filter.optionMode,
+                        { { 0, "Inside a City" },
+                          { 1, "Outside a City" } });
+                }
                 else {
                     ImGuiMCP::TextDisabled("-");
                 }
-                ImGuiMCP::TableSetColumnIndex(3);
+                ImGuiMCP::TableSetColumnIndex(4);
                 ImGuiMCP::TextUnformatted(
                     !filter.editorID.empty() ?
                         filter.editorID.c_str() :
                         filter.formIDStr.c_str());
-                ImGuiMCP::TableSetColumnIndex(4);
+                ImGuiMCP::TableSetColumnIndex(5);
                 const auto compatible =
                     IsFilterAllowedForScope(
                         *g_filterScope,
                         a_requirement.activity,
-                        filter.type);
+                        filter.type) &&
+                    (filter.type != "City Status" ||
+                        (filter.optionMode >= 0 &&
+                         filter.optionMode <= 1));
                 if (compatible) {
                     ImGuiMCP::TextColored(
                         { 0.3f, 0.9f, 0.4f, 1.0f },
@@ -1313,7 +1342,7 @@ namespace WIYT::UI
                         { 1.0f, 0.4f, 0.3f, 1.0f },
                         "INCOMPATIBLE SCOPE");
                 }
-                ImGuiMCP::TableSetColumnIndex(5);
+                ImGuiMCP::TableSetColumnIndex(6);
                 if (ImGuiMCP::Button("X")) {
                     filters.erase(
                         filters.begin() +

@@ -1,4 +1,5 @@
 #include "DistributionCore/UICommon.h"
+#include "Rule.h"
 #include "SKSEMCP/SKSEMenuFramework.hpp"
 
 #include <algorithm>
@@ -151,6 +152,33 @@ namespace DistributionCore::UI
         ImGuiMCP::EndChild();
         ImGuiMCP::EndCombo();
         ImGuiMCP::PopID();
+        return changed;
+    }
+
+    bool DrawFilterOperator(
+        const char* a_label,
+        BlacklistFilter& a_filter)
+    {
+        const char* preview = a_filter.isNot ? "IS NOT" : "IS";
+        ImGuiMCP::SetNextItemWidth(90.0f);
+        const auto open = ImGuiMCP::BeginCombo(a_label, preview);
+        if (ImGuiMCP::IsItemHovered()) {
+            ImGuiMCP::SetTooltip(
+                "Inverts this filter before the list's AND/OR operation.");
+        }
+        if (!open) {
+            return false;
+        }
+        bool changed = false;
+        if (ImGuiMCP::Selectable("IS", !a_filter.isNot)) {
+            a_filter.isNot = false;
+            changed = true;
+        }
+        if (ImGuiMCP::Selectable("IS NOT", a_filter.isNot)) {
+            a_filter.isNot = true;
+            changed = true;
+        }
+        ImGuiMCP::EndCombo();
         return changed;
     }
 }

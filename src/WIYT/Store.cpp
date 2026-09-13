@@ -80,6 +80,29 @@ namespace WIYT
             return false;
         }
 
+        bool EnsureColumn(
+            sqlite3* a_db,
+            const std::string_view a_table,
+            const std::string_view a_column,
+            const std::string_view a_definition)
+        {
+            Statement statement;
+            if (!Prepare(a_db,
+                    std::format("SELECT 1 FROM pragma_table_info('{}') WHERE name=?1", a_table),
+                    statement,
+                    "inspect column")) {
+                return false;
+            }
+            sqlite3_bind_text(statement.handle, 1, a_column.data(),
+                static_cast<int>(a_column.size()), SQLITE_TRANSIENT);
+            if (sqlite3_step(statement.handle) == SQLITE_ROW) {
+                return true;
+            }
+            return Exec(a_db,
+                std::format("ALTER TABLE {} ADD COLUMN {} {}", a_table, a_column, a_definition),
+                "add column");
+        }
+
         bool OpenDatabase(
             const std::filesystem::path& a_path,
             Database& a_database,
@@ -365,6 +388,7 @@ CREATE TABLE IF NOT EXISTS requirement_filters(
     comparison INTEGER NOT NULL,
     minimum_value REAL NOT NULL,
     maximum_value REAL NOT NULL,
+    is_not INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1)),
     PRIMARY KEY(
         title_id, version, requirement_position, scope, position),
     FOREIGN KEY(title_id, version, requirement_position)
@@ -537,6 +561,10 @@ CREATE TABLE IF NOT EXISTS rewards(
                 a_statement,
                 16,
                 a_filter.maximumValue);
+            sqlite3_bind_int(
+                a_statement,
+                17,
+                a_filter.isNot ? 1 : 0);
             return sqlite3_step(a_statement) == SQLITE_DONE;
         }
     }
@@ -720,6 +748,10 @@ CREATE TABLE IF NOT EXISTS rewards(
                 false)) {
             return false;
         }
+        if (!EnsureColumn(database.handle, "requirement_filters", "is_not",
+                "INTEGER NOT NULL DEFAULT 0 CHECK(is_not IN(0,1))")) {
+            return false;
+        }
         Statement metadata;
         if (!Prepare(
                 database.handle,
@@ -839,7 +871,7 @@ CREATE TABLE IF NOT EXISTS rewards(
                         "SELECT scope,type,form_id,editor_id,"
                         "actor_value_name,option_mode,option_value,"
                         "option_text,actor_value_mode,comparison,"
-                        "minimum_value,maximum_value "
+                        "minimum_value,maximum_value,is_not "
                         "FROM requirement_filters WHERE title_id=?1 AND "
                         "version=?2 AND requirement_position=?3 "
                         "ORDER BY scope,position",
@@ -878,6 +910,8 @@ CREATE TABLE IF NOT EXISTS rewards(
                         sqlite3_column_double(filters.handle, 10));
                     filter.maximumValue = static_cast<float>(
                         sqlite3_column_double(filters.handle, 11));
+                    filter.isNot =
+                        sqlite3_column_int(filters.handle, 12) != 0;
                     switch (scope) {
                     case FilterScope::kPlayerPrerequisite:
                         requirement.playerPrerequisiteFilters.push_back(
@@ -1064,7 +1098,7 @@ CREATE TABLE IF NOT EXISTS rewards(
         if (!Prepare(
                 database.handle,
                 "INSERT INTO requirement_filters VALUES("
-                "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                "?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
                 filterStatement,
                 "requirement filters")) {
             rollback();

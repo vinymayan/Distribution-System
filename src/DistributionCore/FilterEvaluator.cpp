@@ -252,13 +252,32 @@ namespace DistributionCore
         }
     }
 
-    FilterEvaluation EvaluateFilter(
+    bool IsCityLocation(RE::BGSLocation* a_location)
+    {
+        static auto* cityKeyword = []() -> RE::BGSKeyword* {
+            auto* form = RE::TESForm::LookupByEditorID("LocTypeCity");
+            return form ? form->As<RE::BGSKeyword>() : nullptr;
+        }();
+        for (auto* location = a_location;
+             cityKeyword && location;
+             location = location->parentLoc) {
+            if (location->HasKeyword(cityKeyword)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static FilterEvaluation EvaluateFilterRaw(
         RE::Actor* a_actor,
         RE::TESNPC* a_npc,
         const BlacklistFilter& a_filter,
         const FilterEvaluationServices& a_services)
     {
         if (a_filter.type == "Actor Value") {
+            if (!IsActorValueFilterValid(a_filter)) {
+                return FilterEvaluation::kInvalid;
+            }
             return Result(MatchesActorValue(a_actor, a_filter));
         }
         if (a_filter.type == "Height") {
@@ -323,6 +342,16 @@ namespace DistributionCore
                     cell->IsInteriorCell() :
                     !cell->IsInteriorCell()));
         }
+        if (a_filter.type == "City Status") {
+            if (a_filter.optionMode < 0 || a_filter.optionMode > 1) {
+                return FilterEvaluation::kInvalid;
+            }
+            const auto inside = IsCityLocation(
+                a_actor ? a_actor->GetCurrentLocation() : nullptr);
+            return Result(
+                static_cast<CityStatusFilter>(a_filter.optionMode) ==
+                    CityStatusFilter::kInsideCity ? inside : !inside);
+        }
         if (a_filter.type == "Equipped Category") {
             return Result(MatchesEquippedCategory(
                 a_actor,
@@ -338,7 +367,7 @@ namespace DistributionCore
             a_filter.editorID,
             a_filter.formIDStr);
         if (a_filter.type != "Gold" && formID == 0) {
-            return FilterEvaluation::kNoMatch;
+            return FilterEvaluation::kInvalid;
         }
 
         if (a_filter.type == "NPC") {
@@ -524,5 +553,22 @@ namespace DistributionCore
                 a_filter));
         }
         return FilterEvaluation::kNotHandled;
+    }
+
+    FilterEvaluation EvaluateFilter(
+        RE::Actor* a_actor,
+        RE::TESNPC* a_npc,
+        const BlacklistFilter& a_filter,
+        const FilterEvaluationServices& a_services)
+    {
+        const auto result = EvaluateFilterRaw(
+            a_actor, a_npc, a_filter, a_services);
+        if (result == FilterEvaluation::kNotHandled ||
+            result == FilterEvaluation::kInvalid ||
+            !a_filter.isNot) {
+            return result;
+        }
+        return result == FilterEvaluation::kMatch ?
+            FilterEvaluation::kNoMatch : FilterEvaluation::kMatch;
     }
 }

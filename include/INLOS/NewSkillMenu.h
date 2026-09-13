@@ -27,6 +27,10 @@ namespace INLOS::NewSkillMenu
         RE::FormID a_actorID,
         std::string_view a_skillID,
         int a_amount);
+    bool AddSkillLevel(
+        RE::FormID a_actorID,
+        std::string_view a_skillID,
+        int a_amount);
     bool AddPerkPoints(
         RE::FormID a_actorID,
         int a_amount);

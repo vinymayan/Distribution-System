@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+struct BlacklistFilter;
+
 namespace DistributionCore::UI
 {
     struct SearchableComboOption
@@ -22,4 +24,8 @@ namespace DistributionCore::UI
         std::uint64_t a_optionsRevision,
         const char* a_searchHint = "Search...",
         const char* a_emptyText = "No items found.");
+
+    bool DrawFilterOperator(
+        const char* a_label,
+        BlacklistFilter& a_filter);
 }

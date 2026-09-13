@@ -102,7 +102,7 @@ namespace DistributionCore
                     { type, type, kAllDomains, numeric });
             }
             for (const auto* type : {
-                     "Source Plugin", "NPC Trait", "Cell Type",
+                     "Source Plugin", "NPC Trait", "Cell Type", "City Status",
                      "Equipped Category" }) {
                 FilterRegistry().Register(
                     { type, type, kAllDomains, 0 });
@@ -142,8 +142,7 @@ namespace DistributionCore
                     ToMask(TypeCapability::kNumeric) });
             RewardRegistry().Register(
                 { "Skill Experience", "Vanilla Skill Experience",
-                    ToMask(Domain::kINLOS) |
-                        ToMask(Domain::kWIYT),
+                    ToMask(Domain::kWIYT),
                     ToMask(TypeCapability::kOneShotOnly) |
                     ToMask(TypeCapability::kNumeric) });
             for (const auto* type : {
@@ -151,8 +150,7 @@ namespace DistributionCore
                      "NSM Skill Bonus" }) {
                 RewardRegistry().Register(
                     { type, type,
-                        ToMask(Domain::kINLOS) |
-                            ToMask(Domain::kWIYT),
+                        ToMask(Domain::kWIYT),
                         ToMask(
                             TypeCapability::kOneShotOnly) |
                             ToMask(
@@ -160,10 +158,16 @@ namespace DistributionCore
             }
             RewardRegistry().Register(
                 { "NSM Perk Points", "NSM Perk Points",
-                    ToMask(Domain::kINLOS) |
-                        ToMask(Domain::kWIYT),
+                    ToMask(Domain::kWIYT),
                     ToMask(TypeCapability::kOneShotOnly) |
                         ToMask(TypeCapability::kNumeric) });
+            for (const auto* type : {
+                     "Skill XP", "Skill Level", "Perk Points" }) {
+                RewardRegistry().Register(
+                    { type, type, ToMask(Domain::kINLOS),
+                        ToMask(TypeCapability::kOneShotOnly) |
+                            ToMask(TypeCapability::kNumeric) });
+            }
             RewardRegistry().Register(
                 { "NSM Resource", "NSM Resource",
                     ToMask(Domain::kINLOS),
