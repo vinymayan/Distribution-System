@@ -1,4 +1,4 @@
-﻿#include "logger.h"
+#include "logger.h"
 #include "hooks.h"
 #include "UI.h"
 #include "Events.h"
@@ -11,6 +11,8 @@
 namespace {
     bool hasDFG = false;
 }
+
+namespace EDF::API { void ClearActorRuleSession(); }
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kPostLoad) {
@@ -67,6 +69,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         EDF::API::SetReady(true);
     }
     if (message->type == SKSE::MessagingInterface::kPreLoadGame) {
+        EDF::API::ClearActorRuleSession();
         SuspendRuleEvaluationForLoad();
         const char* saveName = static_cast<const char*>(message->data);
         if (!saveName) {
@@ -134,6 +137,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
 
 
     if (message->type == SKSE::MessagingInterface::kNewGame) {
+        EDF::API::ClearActorRuleSession();
         logger::info("[Plugin] New Game detectado. Inicializando contexto padrão");
         // CharID 0 e Save 0 representam uma sessão nova sem persistência de disco ainda.
         SaveStateManager::GetSingleton()->SetCurrentContext(0, 0);

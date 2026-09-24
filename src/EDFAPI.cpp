@@ -1,13 +1,19 @@
 #include "EDFAPI.h"
+#include "EDFActorRuleAPI.h"
+#include <unordered_map>
 
 #include "Rule.h"
 #include "RulePackageStore.h"
 #include "SaveState.h"
 #include "logger.h"
+#include "ClibUtil/editorID.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 
 namespace EDF::API
@@ -21,6 +27,59 @@ namespace EDF::API
         };
 
         std::atomic_bool g_ready{ false };
+        std::atomic_uint64_t actorRuleEpoch{0};
+
+        std::string EditorID(RE::TESForm* form) noexcept
+        {
+            if (!form) return {};
+            try {
+                return clib_util::editorID::get_editorID(form);
+            }
+            catch (...) {
+                return {};
+            }
+        }
+
+        std::string PortableFormKey(RE::TESForm* form)
+        {
+            if (!form || form->GetFormID() == 0) return {};
+            if (auto* file = form->GetFile(0)) {
+                const std::string pluginName(file->GetFilename());
+                return std::format(
+                    "{}|{}",
+                    pluginName,
+                    FormatLocalFormID(form->GetFormID(), pluginName));
+            }
+            // Dynamic/created forms (for example DFG forms) may not have a TESFile.
+            // Keep a runtime fallback while EditorID remains the primary identity.
+            return std::format("Dynamic|{:08X}", form->GetFormID());
+        }
+
+        std::string ActorRuleDisplayName(RE::Actor* actor, const std::string_view fallbackKey)
+        {
+            if (!actor) return std::string(fallbackKey);
+            auto* base = actor->GetActorBase();
+            if (!base) return std::string(fallbackKey);
+
+            const auto editorID = EditorID(base);
+            const auto formKey = PortableFormKey(base);
+            std::string name;
+            if (!editorID.empty()) name = editorID;
+            if (!formKey.empty()) {
+                if (!name.empty()) name += " | ";
+                name += formKey;
+            }
+            if (name.empty()) return std::string(fallbackKey);
+
+            // Keep the requester's stable reference key when it adds information
+            // beyond the base form. This prevents collisions between two refs
+            // that share the same NPC base while keeping the visible EditorID + form.
+            if (!fallbackKey.empty() && fallbackKey.find(formKey) == std::string_view::npos) {
+                name += " | ";
+                name += fallbackKey;
+            }
+            return name;
+        }
 
         void CopyText(char* destination, const std::size_t capacity,
             const std::string_view value)
@@ -406,12 +465,18 @@ namespace EDF::API
                 const std::string ruleID =
                     request->ruleID ? request->ruleID : "";
                 const auto actorID = request->actorFormID;
-                return Queue([requester, ruleID, actorID, reset,
+                const auto epoch = actorRuleEpoch.load();
+                return Queue([requester, ruleID, actorID, reset, epoch,
                               target = CallbackTarget{ callback, userData }] {
                     auto result = MakeResult(reset ?
                         Operation::kResetActor :
                         Operation::kReevaluateActor);
                     result.actorFormID = actorID;
+                    if (epoch != actorRuleEpoch.load()) {
+                        result.status = Status::kNotReady;
+                        Complete(target, result);
+                        return;
+                    }
                     CopyText(result.ruleID, sizeof(result.ruleID), ruleID);
                     std::string error;
                     if (!ValidateRequester(requester, error)) {
@@ -434,9 +499,108 @@ namespace EDF::API
                             Status::kNotFound;
                     }
                     else {
+                        const auto startedAt = std::chrono::steady_clock::now();
+
                         ApplyRulesToInstance(
                             actor, RuleEvaluationDelta::Full());
-                        result.status = Status::kSuccess;
+
+                        // If the caller supplied a ruleID, verify EDF's own
+                        // activation ledger instead of asking Actor::HasPerk.
+                        // This is especially important for runtime/distributed
+                        // perks whose effective ownership may not be reflected
+                        // by the console or by the caller's HasPerk probe.
+                        if (!ruleID.empty()) {
+                            const auto* rule =
+                                RuleManager::GetSingleton()->FindRule(ruleID);
+                            if (!rule) {
+                                result.status = Status::kNotFound;
+                                CopyText(
+                                    result.error,
+                                    sizeof(result.error),
+                                    std::format(
+                                        "rule '{}' was not found after reevaluation",
+                                        ruleID));
+                            } else {
+                                auto* saves = SaveStateManager::GetSingleton();
+                                const auto npcKey =
+                                    SaveStateManager::BuildNPCKey(actor);
+                                auto& session = saves->GetSessionData();
+                                const auto npcIt =
+                                    session.npcRuleVersions.find(npcKey);
+
+                                const AppliedRuleState* state = nullptr;
+                                if (npcIt != session.npcRuleVersions.end()) {
+                                    const auto stateIt =
+                                        npcIt->second.find(ruleID);
+                                    if (stateIt != npcIt->second.end()) {
+                                        state = std::addressof(stateIt->second);
+                                    }
+                                }
+
+                                std::size_t perkRewards = 0;
+                                for (const auto& group : rule->rewardGroups) {
+                                    perkRewards += std::ranges::count_if(
+                                        group.rewards,
+                                        [](const Reward& reward) {
+                                            return reward.typeReward == "Perk";
+                                        });
+                                }
+
+                                const bool active =
+                                    state &&
+                                    state->activationStateKnown &&
+                                    state->isActive;
+                                const bool currentVersion =
+                                    state && state->version == rule->version;
+                                const bool rewardsSelected =
+                                    state &&
+                                    state->activeRewardKeys.size() >=
+                                        perkRewards;
+
+                                if (!active ||
+                                    !currentVersion ||
+                                    !rewardsSelected) {
+                                    result.status =
+                                        Status::kValidationFailed;
+                                    CopyText(
+                                        result.error,
+                                        sizeof(result.error),
+                                        std::format(
+                                            "rule activation verification failed: active={} stateVersion={} ruleVersion={} activeRewards={} expectedPerkRewards={}",
+                                            active,
+                                            state ? state->version : -1,
+                                            rule->version,
+                                            state ?
+                                                state->activeRewardKeys.size() :
+                                                0,
+                                            perkRewards));
+                                } else {
+                                    result.status = Status::kSuccess;
+                                }
+
+                                const auto elapsedMs =
+                                    std::chrono::duration_cast<
+                                        std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now() -
+                                            startedAt)
+                                        .count();
+                                logger::info(
+                                    "[EDF ActorRule] reevaluate actor={:08X} rule='{}' status={} active={} stateVersion={} ruleVersion={} activeRewards={} perkRewards={} elapsedMs={}",
+                                    actorID,
+                                    ruleID,
+                                    static_cast<std::uint32_t>(
+                                        result.status),
+                                    active,
+                                    state ? state->version : -1,
+                                    rule->version,
+                                    state ?
+                                        state->activeRewardKeys.size() : 0,
+                                    perkRewards,
+                                    elapsedMs);
+                            }
+                        } else {
+                            result.status = Status::kSuccess;
+                        }
                     }
                     Complete(target, result);
                 });
@@ -459,4 +623,259 @@ namespace EDF::API
 extern "C" __declspec(dllexport) void* GetEDFRuleAPI()
 {
     return EDF::API::GetService();
+}
+
+
+namespace EDF::API
+{
+    namespace
+    {
+        std::unordered_map<std::string, RE::FormID> actorRuleTargets;
+        constexpr std::string_view actorPackagePrefix = "edf.actor-api.";
+
+        bool SyncActorRule(const ActorRules::Request* request,
+            Callback callback, void* userData) noexcept
+        {
+            if (!request || request->structSize < sizeof(*request) ||
+                !request->requester || !request->actorKey ||
+                !request->actorFormID || request->perkCount > 100000 ||
+                (request->perkCount && !request->perks) || !callback) return false;
+            const std::string requester(request->requester), key(request->actorKey);
+            const auto actorID = request->actorFormID;
+            std::vector<std::uint32_t> perks;
+            if (request->perkCount) perks.assign(request->perks, request->perks + request->perkCount);
+            const auto epoch = actorRuleEpoch.load();
+            return Queue([requester, key, actorID, perks = std::move(perks), epoch,
+                          target = CallbackTarget{callback, userData}] {
+                auto result = MakeResult(Operation::kUpdate);
+                result.actorFormID = actorID;
+                if (epoch != actorRuleEpoch.load()) {
+                    result.status = Status::kNotReady;
+                    Complete(target, result);
+                    return;
+                }
+                std::string error;
+                if (!ValidateRequester(requester, error) || key.empty() || key.size() > 1024) {
+                    result.status = Status::kInvalidArgument;
+                    Complete(target, result);
+                    return;
+                }
+                auto* actor = RE::TESForm::LookupByID<RE::Actor>(actorID);
+                auto* actorBase = actor ? actor->GetActorBase() : nullptr;
+                const auto ruleName = ActorRuleDisplayName(actor, key);
+
+                Rule definition;
+                definition.name = ruleName;
+                definition.actorScope = RuleActorScope::kNPCOnly;
+                definition.isEnabled = true;
+                if (actorBase) {
+                    BlacklistFilter actorFilter;
+                    actorFilter.type = "NPC";
+                    actorFilter.editorID = EditorID(actorBase);
+                    actorFilter.formIDStr = PortableFormKey(actorBase);
+                    if (!actorFilter.editorID.empty() || !actorFilter.formIDStr.empty()) {
+                        definition.targetFilters.push_back(std::move(actorFilter));
+                    }
+                }
+                RewardGroup group;
+                group.name = "Purchased perks";
+                for (auto id : perks) {
+                    auto* perk = RE::TESForm::LookupByID<RE::BGSPerk>(id);
+                    if (!perk) {
+                        result.status = Status::kInvalidArgument;
+                        CopyText(result.error, sizeof(result.error),
+                            std::format("perk {:08X} is not loaded", id));
+                        Complete(target, result);
+                        return;
+                    }
+                    Reward reward;
+                    reward.typeReward = "Perk";
+                    reward.editorID = EditorID(perk);
+                    reward.formIDStr = PortableFormKey(perk);
+                    if (reward.editorID.empty() && reward.formIDStr.empty()) {
+                        result.status = Status::kInvalidArgument;
+                        CopyText(result.error, sizeof(result.error),
+                            std::format("perk {:08X} has no resolvable identity", id));
+                        Complete(target, result);
+                        return;
+                    }
+                    reward.amount = 1;
+                    reward.chanceReward = 100.0f;
+                    reward.isPersistent = false;
+                    group.rewards.push_back(std::move(reward));
+                }
+                definition.rewardGroups.push_back(std::move(group));
+                auto* manager = RuleManager::GetSingleton();
+                const auto packageID = std::string(actorPackagePrefix) + PackageID(requester);
+                bool exists = false;
+                for (const auto& package : manager->GetPackages()) exists |= package.id == packageID;
+                if (!exists && !manager->CreatePackage(requester, packageID)) {
+                    result.status = Status::kPersistenceFailed;
+                    CopyText(result.error, sizeof(result.error),
+                        std::format("could not create actor package '{}'", requester));
+                    Complete(target, result);
+                    return;
+                }
+                if (exists && !manager->RenamePackage(packageID, requester)) {
+                    result.status = Status::kPersistenceFailed;
+                    CopyText(result.error, sizeof(result.error),
+                        std::format("could not rename actor package to '{}'", requester));
+                    Complete(target, result);
+                    return;
+                }
+                Rule* current = nullptr;
+                for (auto& rule : manager->GetRules()) {
+                    if (rule.packageID == packageID &&
+                        (rule.name == ruleName || rule.name == key)) {
+                        current = &rule;
+                        break;
+                    }
+                }
+                if (!current) current = &manager->CreateRule(packageID);
+                const Rule backup = *current;
+                definition.id = backup.id;
+                definition.packageID = packageID;
+                definition.version = backup.version;
+                if (backup.version > 0 && backup.CalculateHash() == definition.CalculateHash()) {
+                    actorRuleTargets[backup.id] = actorID;
+                    result.status = Status::kSuccess;
+                    CopyText(result.ruleID, sizeof(result.ruleID), backup.id);
+                    Complete(target, result);
+                    return;
+                }
+                *current = std::move(definition);
+                const auto id = current->id;
+                CopyText(result.ruleID, sizeof(result.ruleID), id);
+
+                const auto syncStartedAt =
+                    std::chrono::steady_clock::now();
+
+                // Make the exact-reference binding visible before SaveRule()
+                // rebuilds EDF's runtime indexes.
+                const auto previousTarget =
+                    actorRuleTargets.find(id);
+                const bool hadPreviousTarget =
+                    previousTarget != actorRuleTargets.end();
+                const auto previousActorID =
+                    hadPreviousTarget ? previousTarget->second : 0;
+                actorRuleTargets[id] = actorID;
+
+                if (!manager->SaveRule(id)) {
+                    if (auto* restore = manager->FindRule(id)) {
+                        *restore = backup;
+                    }
+                    if (hadPreviousTarget) {
+                        actorRuleTargets[id] = previousActorID;
+                    } else {
+                        actorRuleTargets.erase(id);
+                    }
+                    manager->RebuildDependencyIndex();
+                    result.status = Status::kPersistenceFailed;
+                    CopyText(
+                        result.error,
+                        sizeof(result.error),
+                        std::format(
+                            "could not save actor rule '{}'",
+                            current->name));
+                } else {
+                    // Verify what is actually present in the rule after
+                    // SaveRule(). A successful callback now guarantees that
+                    // every requested perk is represented as a reward.
+                    const auto* saved =
+                        manager->FindRule(id);
+                    std::set<RE::FormID> savedPerks;
+
+                    if (saved) {
+                        for (const auto& savedGroup :
+                             saved->rewardGroups) {
+                            for (const auto& savedReward :
+                                 savedGroup.rewards) {
+                                if (savedReward.typeReward != "Perk") {
+                                    continue;
+                                }
+
+                                const auto savedID =
+                                    ResolveEDFFormID(
+                                        "Perk",
+                                        savedReward.editorID,
+                                        savedReward.formIDStr);
+                                if (savedID) {
+                                    savedPerks.insert(savedID);
+                                }
+
+                                logger::info(
+                                    "[EDF ActorRule] saved reward rule='{}' editorID='{}' form='{}' resolved={:08X}",
+                                    id,
+                                    savedReward.editorID,
+                                    savedReward.formIDStr,
+                                    savedID);
+                            }
+                        }
+                    }
+
+                    const std::set<RE::FormID> requestedPerks(
+                        perks.begin(),
+                        perks.end());
+                    const bool rewardsComplete =
+                        saved &&
+                        requestedPerks == savedPerks;
+
+                    const auto elapsedMs =
+                        std::chrono::duration_cast<
+                            std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() -
+                                syncStartedAt)
+                            .count();
+
+                    if (!rewardsComplete) {
+                        result.status = Status::kPersistenceFailed;
+                        CopyText(
+                            result.error,
+                            sizeof(result.error),
+                            std::format(
+                                "saved actor rule reward mismatch: requested={} saved={}",
+                                requestedPerks.size(),
+                                savedPerks.size()));
+                        logger::error(
+                            "[EDF ActorRule] rule save verification FAILED actor={:08X} rule='{}' requestedPerks={} savedPerks={} elapsedMs={}",
+                            actorID,
+                            id,
+                            requestedPerks.size(),
+                            savedPerks.size(),
+                            elapsedMs);
+                    } else {
+                        result.status = Status::kSuccess;
+                        logger::info(
+                            "[EDF ActorRule] rule save verified actor={:08X} rule='{}' version={} requestedPerks={} savedPerks={} elapsedMs={}",
+                            actorID,
+                            id,
+                            saved ? saved->version : 0,
+                            requestedPerks.size(),
+                            savedPerks.size(),
+                            elapsedMs);
+                    }
+                }
+                Complete(target, result);
+            });
+        }
+    }
+
+    void ClearActorRuleSession()
+    {
+        ++actorRuleEpoch;
+        actorRuleTargets.clear();
+    }
+
+    bool MatchesActorRuleSession(const Rule& rule, RE::Actor* actor)
+    {
+        if (!rule.packageID.starts_with(actorPackagePrefix)) return true;
+        const auto found = actorRuleTargets.find(rule.id);
+        return actor && found != actorRuleTargets.end() && found->second == actor->GetFormID();
+    }
+}
+
+extern "C" __declspec(dllexport) EDF::ActorRules::Interface* GetEDFActorRuleAPI()
+{
+    static EDF::ActorRules::Interface api{1, EDF::API::SyncActorRule};
+    return &api;
 }

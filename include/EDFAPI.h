@@ -70,7 +70,8 @@ namespace EDF::API
         std::uint32_t structSize{ sizeof(ActorRequest) };
         const char* requester = nullptr;
         std::uint32_t actorFormID = 0;
-        // Used only by QueueResetActor. Empty resets every active rule.
+        // Optional. QueueReevaluateActor uses it to verify that the exact rule became active;
+        // QueueResetActor uses it to select a rule. Empty reset targets every active rule.
         const char* ruleID = nullptr;
     };
 

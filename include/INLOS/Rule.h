@@ -24,6 +24,24 @@ namespace INLOS
     inline constexpr std::string_view kVanillaSkillPrefix = "Vanilla|";
     inline constexpr std::string_view kNSMSkillPrefix = "NSM|";
 
+    [[nodiscard]] constexpr std::string_view GetNSMSkillID(
+        const std::string_view a_skillID)
+    {
+        if (a_skillID == "OneHanded") {
+            return "One-Handed";
+        }
+        if (a_skillID == "TwoHanded") {
+            return "Two-Handed";
+        }
+        if (a_skillID == "HeavyArmor") {
+            return "Heavy Armor";
+        }
+        if (a_skillID == "LightArmor") {
+            return "Light Armor";
+        }
+        return a_skillID;
+    }
+
     [[nodiscard]] constexpr SkillSource GetSkillSource(
         const std::string_view a_reference)
     {
@@ -65,6 +83,8 @@ namespace INLOS
 
     static_assert(GetSkillSource("Vanilla|OneHanded") == SkillSource::kVanilla);
     static_assert(GetSkillID("NSM|CustomSkill") == "CustomSkill");
+    static_assert(GetNSMSkillID("OneHanded") == "One-Handed");
+    static_assert(GetNSMSkillID("Archery") == "Archery");
 
     enum class Trigger : std::uint8_t
     {

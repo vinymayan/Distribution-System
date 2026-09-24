@@ -2013,6 +2013,14 @@ namespace INLOS::UI
                 });
             }
             for (const auto& skill : skills) {
+                const auto isVanilla = std::ranges::any_of(
+                    kVanillaSkills,
+                    [&](const VanillaSkillOption& a_skill) {
+                        return GetNSMSkillID(a_skill.id) == skill;
+                    });
+                if (isVanilla) {
+                    continue;
+                }
                 options.push_back({
                     MakeSkillReference(SkillSource::kNSM, skill),
                     std::format("{} (NSM)", skill)
@@ -2042,10 +2050,13 @@ namespace INLOS::UI
                     [&](const VanillaSkillOption& a_skill) {
                         return a_skill.id == skillID;
                     });
+            const auto vanillaRegisteredWithNSM = vanillaValid &&
+                NewSkillMenu::HasSkill(GetNSMSkillID(skillID));
             const auto nsmValid = source == SkillSource::kNSM &&
                 NewSkillMenu::HasSkill(skillID);
             ImGuiMCP::SameLine();
-            if (vanillaValid && a_reward.typeReward == "Skill XP") {
+            if (vanillaValid && a_reward.typeReward == "Skill XP" &&
+                !vanillaRegisteredWithNSM) {
                 ImGuiMCP::TextColored(
                     { 0.95f, 0.75f, 0.3f, 1.0f },
                     "PLAYER ONLY");
@@ -2206,7 +2217,7 @@ namespace INLOS::UI
                 "The receiver is the killer or defeater allowed by INLOS Loot Receivers.");
             ImGuiMCP::TextColored(
                 progressionTextColor,
-                "General experience and vanilla skill XP require the receiver to be the Player.");
+                "General experience requires the Player; vanilla skill XP supports other receivers when registered by NSM.");
             if (rule.isExclusive) {
                 const auto total = std::accumulate(
                     rule.rewardGroups.begin(),

@@ -1572,6 +1572,42 @@ std::optional<std::string> RulePackageStore::CreatePackage(
     return package.id;
 }
 
+bool RulePackageStore::RenamePackage(
+    const std::string_view packageID,
+    const std::string_view displayName)
+{
+    const std::string id(packageID);
+    const std::string name(displayName);
+    if (id.empty() || name.empty()) return false;
+
+    auto found = std::ranges::find_if(_packages, [&](const RulePackage& package) {
+        return package.id == id;
+    });
+    if (found == _packages.end()) return false;
+    if (found->displayName == name) return true;
+
+    const auto duplicate = std::ranges::find_if(_packages, [&](const RulePackage& package) {
+        return package.id != id && package.displayName == name;
+    });
+    if (duplicate != _packages.end()) {
+        logger::error(
+            "[RulePackageStore] Cannot rename package '{}' to '{}': name already exists.",
+            found->displayName, name);
+        return false;
+    }
+
+    const auto previous = found->displayName;
+    found->displayName = name;
+    if (!WriteManifest(*found)) {
+        found->displayName = previous;
+        return false;
+    }
+    logger::info(
+        "[RulePackageStore] Package '{}' renamed to '{}'.",
+        previous, name);
+    return true;
+}
+
 bool RulePackageStore::CreateSnapshot(
     const std::string_view displayName,
     const std::vector<Rule>& rules,

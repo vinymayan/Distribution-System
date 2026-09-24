@@ -1074,17 +1074,28 @@ namespace INLOS
                         experienceMultiplier;
                 if (source == SkillSource::kVanilla) {
                     const auto actorValue = ResolveActorValue(skillID);
-                    if (!progressionReceiver->IsPlayerRef()) {
-                        logger::debug(
-                            "[INLOS] Vanilla skill XP is player-only; "
-                            "receiver {:08X} was ignored.",
-                            progressionReceiver->GetFormID());
-                    } else if (IsVanillaSkill(actorValue)) {
-                        player->AddSkillExperience(actorValue, amount);
-                    } else {
+                    if (!IsVanillaSkill(actorValue)) {
                         logger::warn(
                             "[INLOS] Vanilla skill '{}' is invalid.",
                             skillID);
+                        return;
+                    }
+
+                    const auto nsmSkillID = GetNSMSkillID(skillID);
+                    const auto appliedByNSM =
+                        NewSkillMenu::HasSkill(nsmSkillID) &&
+                        NewSkillMenu::AddSkillExperience(
+                            progressionReceiver->GetFormID(),
+                            nsmSkillID,
+                            amount);
+                    if (!appliedByNSM && progressionReceiver->IsPlayerRef()) {
+                        player->AddSkillExperience(actorValue, amount);
+                    } else if (!appliedByNSM) {
+                        logger::warn(
+                            "[INLOS] Vanilla skill XP for actor {:08X} "
+                            "requires skill '{}' to be registered by NSM.",
+                            progressionReceiver->GetFormID(),
+                            nsmSkillID);
                     }
                 } else if (source != SkillSource::kNSM ||
                     !NewSkillMenu::AddSkillExperience(

@@ -1322,7 +1322,9 @@ bool MatchesEquippedCategory(
         });
 }
 
+namespace EDF::API { bool MatchesActorRuleSession(const Rule&, RE::Actor*); }
 bool IsNPCMatchingTargets(RE::TESNPC* npc, const Rule& rule, bool isBlacklist, RE::Actor* actor) {
+    if (!isBlacklist && !EDF::API::MatchesActorRuleSession(rule, actor)) return false;
     // 1. Seleciona os dados baseados no modo (Target vs Blacklist)
     int genderFilter = isBlacklist ? rule.blacklistedGender : rule.targetGender;
     int humanoidFilter = isBlacklist ? rule.blacklistedHumanoid : rule.targetHumanoid;
@@ -2169,6 +2171,14 @@ std::optional<std::string> RuleManager::CreatePackage(
     const std::string_view requestedID) {
     return RulePackageStore::GetSingleton()->CreatePackage(
         displayName, requestedID);
+}
+
+bool RuleManager::RenamePackage(
+    const std::string_view packageID,
+    const std::string_view displayName)
+{
+    return RulePackageStore::GetSingleton()->RenamePackage(
+        packageID, displayName);
 }
 
 bool RuleManager::MarkPackageForDeletion(const std::string_view packageID)

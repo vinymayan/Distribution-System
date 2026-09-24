@@ -1,10 +1,11 @@
-#include "INLOS/NewSkillMenu.h"
+﻿#include "INLOS/NewSkillMenu.h"
 #include "SkillMenuAPI.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <utility>
 #include <windows.h>
 
 namespace INLOS::NewSkillMenu
@@ -26,8 +27,8 @@ namespace INLOS::NewSkillMenu
             std::vector<std::string> values;
             values.reserve(a_view.count);
             for (std::uint32_t index = 0;
-                 index < a_view.count;
-                 ++index) {
+                index < a_view.count;
+                ++index) {
                 if (a_view.items && a_view.items[index] &&
                     a_view.items[index][0] != '\0') {
                     values.emplace_back(a_view.items[index]);
@@ -40,62 +41,111 @@ namespace INLOS::NewSkillMenu
             return values;
         }
 
-        bool HasSkillLocked(const std::string_view a_skillID)
+        SkillMenuAPI::Interface* GetInterfaceSnapshot()
         {
-            return !a_skillID.empty() &&
-                std::ranges::binary_search(
-                    g_skills,
-                    std::string(a_skillID));
+            std::scoped_lock lock(g_lock);
+            return g_interface;
         }
 
-        bool RefreshSkillsLocked()
+        std::pair<std::size_t, std::size_t> GetListSizes()
         {
-            if (!g_interface ||
-                g_interface->interfaceVersion <
-                    SkillMenuAPI::Version ||
-                !g_interface->GetAvailableSkills) {
+            std::scoped_lock lock(g_lock);
+            return { g_skills.size(), g_resources.size() };
+        }
+
+        bool RefreshSkillsFromInterface(
+            SkillMenuAPI::Interface* a_interface)
+        {
+            if (!a_interface ||
+                a_interface->interfaceVersion < SkillMenuAPI::Version ||
+                !a_interface->GetAvailableSkills) {
                 return false;
             }
-            const auto view =
-                g_interface->GetAvailableSkills();
-            g_skills = CopyListView(view);
-            g_nextSkillRefresh =
+
+            // IMPORTANT: never hold INLOS::g_lock while crossing into
+            // SkillMenu.dll. A callback/re-entrant path in NSM could otherwise
+            // wait on INLOS while INLOS is waiting on NSM, creating an AB/BA
+            // deadlock across DLL boundaries.
+            auto values = CopyListView(
+                a_interface->GetAvailableSkills());
+            const auto nextRefresh =
                 std::chrono::steady_clock::now() +
-                (g_skills.empty() ?
+                (values.empty() ?
                     std::chrono::seconds(1) :
                     std::chrono::seconds(30));
+
+            std::scoped_lock lock(g_lock);
+            if (g_interface != a_interface) {
+                return false;
+            }
+            g_skills = std::move(values);
+            g_nextSkillRefresh = nextRefresh;
             return true;
         }
 
-        bool RefreshResourcesLocked()
+        bool RefreshResourcesFromInterface(
+            SkillMenuAPI::Interface* a_interface)
         {
-            if (!g_interface ||
-                g_interface->interfaceVersion <
-                    SkillMenuAPI::Version ||
-                !g_interface->GetAvailableResources) {
+            if (!a_interface ||
+                a_interface->interfaceVersion < SkillMenuAPI::Version ||
+                !a_interface->GetAvailableResources) {
                 return false;
             }
-            g_resources = CopyListView(
-                g_interface->GetAvailableResources());
-            g_nextResourceRefresh =
+
+            auto values = CopyListView(
+                a_interface->GetAvailableResources());
+            const auto nextRefresh =
                 std::chrono::steady_clock::now() +
-                (g_resources.empty() ?
+                (values.empty() ?
                     std::chrono::seconds(1) :
                     std::chrono::seconds(30));
+
+            std::scoped_lock lock(g_lock);
+            if (g_interface != a_interface) {
+                return false;
+            }
+            g_resources = std::move(values);
+            g_nextResourceRefresh = nextRefresh;
             return true;
+        }
+
+        bool HasSkillSnapshot(const std::string_view a_skillID)
+        {
+            if (a_skillID.empty()) {
+                return false;
+            }
+            std::scoped_lock lock(g_lock);
+            return std::ranges::binary_search(
+                g_skills,
+                std::string(a_skillID));
+        }
+
+        bool HasResourceSnapshot(const std::string_view a_resourceID)
+        {
+            if (a_resourceID.empty()) {
+                return false;
+            }
+            std::scoped_lock lock(g_lock);
+            return std::ranges::binary_search(
+                g_resources,
+                std::string(a_resourceID));
         }
     }
 
     bool Initialize()
     {
-        std::scoped_lock lock(g_lock);
-        if (g_interface) {
-            return true;
+        {
+            std::scoped_lock lock(g_lock);
+            if (g_interface) {
+                return true;
+            }
         }
+
         auto* module = GetModuleHandleA("SkillMenu.dll");
         if (!module) {
             return false;
         }
+
         const auto getter = reinterpret_cast<GetInterface>(
             GetProcAddress(module, "GetSkillMenuAPI"));
         if (!getter) {
@@ -103,23 +153,39 @@ namespace INLOS::NewSkillMenu
                 "[INLOS] SkillMenu.dll does not export GetSkillMenuAPI.");
             return false;
         }
+
+        // Cross the DLL boundary without holding the INLOS mutex.
         auto* candidate =
             static_cast<SkillMenuAPI::Interface*>(getter());
         if (!candidate ||
-            candidate->interfaceVersion <
-                SkillMenuAPI::Version) {
+            candidate->interfaceVersion < SkillMenuAPI::Version) {
             logger::warn(
                 "[INLOS] New Skill Menu API v{} or newer is required.",
                 SkillMenuAPI::Version);
             return false;
         }
-        g_interface = candidate;
-        RefreshSkillsLocked();
-        logger::info(
-            "[INLOS] New Skill Menu API v{} connected ({} custom skills).",
-            g_interface->interfaceVersion,
-            g_skills.size());
-        return true;
+
+        SkillMenuAPI::Interface* activeInterface = nullptr;
+        bool newlyConnected = false;
+        {
+            std::scoped_lock lock(g_lock);
+            if (!g_interface) {
+                g_interface = candidate;
+                newlyConnected = true;
+            }
+            activeInterface = g_interface;
+        }
+
+        if (newlyConnected) {
+            RefreshSkillsFromInterface(activeInterface);
+            const auto [skillCount, resourceCount] = GetListSizes();
+            (void)resourceCount;
+            logger::info(
+                "[INLOS] New Skill Menu API v{} connected ({} custom skills).",
+                activeInterface->interfaceVersion,
+                skillCount);
+        }
+        return activeInterface != nullptr;
     }
 
     bool IsAvailable()
@@ -141,55 +207,84 @@ namespace INLOS::NewSkillMenu
         if (!Initialize()) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        const auto skillsRefreshed = RefreshSkillsLocked();
-        const auto resourcesRefreshed = RefreshResourcesLocked();
+
+        auto* api = GetInterfaceSnapshot();
+        const auto skillsRefreshed =
+            RefreshSkillsFromInterface(api);
+        const auto resourcesRefreshed =
+            RefreshResourcesFromInterface(api);
+
         if (skillsRefreshed || resourcesRefreshed) {
+            const auto [skillCount, resourceCount] = GetListSizes();
             logger::info(
                 "[INLOS] NSM lists refreshed ({} skills, {} resources).",
-                g_skills.size(),
-                g_resources.size());
+                skillCount,
+                resourceCount);
         }
         return skillsRefreshed && resourcesRefreshed;
     }
 
-    const std::vector<std::string>& AvailableSkills()
+    std::vector<std::string> AvailableSkills()
     {
-        if (!IsAvailable()) {
-            Initialize();
+        if (!IsAvailable() && !Initialize()) {
+            return {};
         }
+
+        auto* api = GetInterfaceSnapshot();
+        bool shouldRefresh = false;
+        {
+            std::scoped_lock lock(g_lock);
+            shouldRefresh =
+                g_interface && g_skills.empty() &&
+                std::chrono::steady_clock::now() >=
+                g_nextSkillRefresh;
+        }
+        if (shouldRefresh) {
+            RefreshSkillsFromInterface(api);
+        }
+
         std::scoped_lock lock(g_lock);
-        if (g_interface && g_skills.empty() &&
-            std::chrono::steady_clock::now() >=
-                g_nextSkillRefresh) {
-            RefreshSkillsLocked();
-        }
         return g_skills;
     }
 
     bool HasSkill(const std::string_view a_skillID)
     {
-        if (!Initialize()) {
+        if (a_skillID.empty() || !Initialize()) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (g_skills.empty()) {
-            RefreshSkillsLocked();
+
+        auto* api = GetInterfaceSnapshot();
+        bool shouldRefresh = false;
+        {
+            std::scoped_lock lock(g_lock);
+            shouldRefresh = g_skills.empty();
         }
-        return HasSkillLocked(a_skillID);
+        if (shouldRefresh) {
+            RefreshSkillsFromInterface(api);
+        }
+        return HasSkillSnapshot(a_skillID);
     }
 
-    const std::vector<std::string>& AvailableResources()
+    std::vector<std::string> AvailableResources()
     {
-        if (!IsAvailable()) {
-            Initialize();
+        if (!IsAvailable() && !Initialize()) {
+            return {};
         }
+
+        auto* api = GetInterfaceSnapshot();
+        bool shouldRefresh = false;
+        {
+            std::scoped_lock lock(g_lock);
+            shouldRefresh =
+                g_interface && g_resources.empty() &&
+                std::chrono::steady_clock::now() >=
+                g_nextResourceRefresh;
+        }
+        if (shouldRefresh) {
+            RefreshResourcesFromInterface(api);
+        }
+
         std::scoped_lock lock(g_lock);
-        if (g_interface && g_resources.empty() &&
-            std::chrono::steady_clock::now() >=
-                g_nextResourceRefresh) {
-            RefreshResourcesLocked();
-        }
         return g_resources;
     }
 
@@ -198,13 +293,17 @@ namespace INLOS::NewSkillMenu
         if (a_resourceID.empty() || !Initialize()) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (g_resources.empty()) {
-            RefreshResourcesLocked();
+
+        auto* api = GetInterfaceSnapshot();
+        bool shouldRefresh = false;
+        {
+            std::scoped_lock lock(g_lock);
+            shouldRefresh = g_resources.empty();
         }
-        return std::ranges::binary_search(
-            g_resources,
-            std::string(a_resourceID));
+        if (shouldRefresh) {
+            RefreshResourcesFromInterface(api);
+        }
+        return HasResourceSnapshot(a_resourceID);
     }
 
     bool AddSkillExperience(
@@ -217,13 +316,14 @@ namespace INLOS::NewSkillMenu
             !HasSkill(a_skillID)) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (!g_interface ||
-            !g_interface->AddCustomSkillXPForActor) {
+
+        auto* api = GetInterfaceSnapshot();
+        if (!api || !api->AddCustomSkillXPForActor) {
             return false;
         }
+
         const std::string skillID(a_skillID);
-        g_interface->AddCustomSkillXPForActor(
+        api->AddCustomSkillXPForActor(
             a_actorID,
             skillID.c_str(),
             a_amount);
@@ -238,13 +338,14 @@ namespace INLOS::NewSkillMenu
         if (a_amount == 0 || !HasSkill(a_skillID)) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (!g_interface ||
-            !g_interface->ModCustomSkillBonusForActor) {
+
+        auto* api = GetInterfaceSnapshot();
+        if (!api || !api->ModCustomSkillBonusForActor) {
             return false;
         }
+
         const std::string skillID(a_skillID);
-        g_interface->ModCustomSkillBonusForActor(
+        api->ModCustomSkillBonusForActor(
             a_actorID,
             skillID.c_str(),
             a_amount);
@@ -259,13 +360,14 @@ namespace INLOS::NewSkillMenu
         if (a_amount == 0 || !HasSkill(a_skillID)) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (!g_interface ||
-            !g_interface->ModCustomSkillLevelForActor) {
+
+        auto* api = GetInterfaceSnapshot();
+        if (!api || !api->ModCustomSkillLevelForActor) {
             return false;
         }
+
         const std::string skillID(a_skillID);
-        g_interface->ModCustomSkillLevelForActor(
+        api->ModCustomSkillLevelForActor(
             a_actorID,
             skillID.c_str(),
             a_amount);
@@ -279,12 +381,13 @@ namespace INLOS::NewSkillMenu
         if (a_amount == 0 || !Initialize()) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (!g_interface ||
-            !g_interface->ModActorPerkPoints) {
+
+        auto* api = GetInterfaceSnapshot();
+        if (!api || !api->ModActorPerkPoints) {
             return false;
         }
-        g_interface->ModActorPerkPoints(
+
+        api->ModActorPerkPoints(
             a_actorID,
             a_amount);
         return true;
@@ -295,17 +398,19 @@ namespace INLOS::NewSkillMenu
         const std::string_view a_resourceID,
         const float a_amount)
     {
-        if (!std::isfinite(a_amount) || a_amount <= 0.0f ||
+        if (!std::isfinite(a_amount) ||
+            a_amount <= 0.0f ||
             !HasResource(a_resourceID)) {
             return false;
         }
-        std::scoped_lock lock(g_lock);
-        if (!g_interface ||
-            !g_interface->ModActorResource) {
+
+        auto* api = GetInterfaceSnapshot();
+        if (!api || !api->ModActorResource) {
             return false;
         }
+
         const std::string resourceID(a_resourceID);
-        return g_interface->ModActorResource(
+        return api->ModActorResource(
             a_actorID,
             resourceID.c_str(),
             a_amount);

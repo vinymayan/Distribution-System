@@ -380,6 +380,7 @@ public:
     std::optional<std::string> CreatePackage(
         std::string_view displayName,
         std::string_view requestedID = {});
+    bool RenamePackage(std::string_view packageID, std::string_view displayName);
     bool MarkPackageForDeletion(std::string_view packageID);
     bool CancelPackageDeletion(std::string_view packageID);
     bool IsPackagePendingDeletion(std::string_view packageID) const;

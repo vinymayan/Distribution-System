@@ -14,9 +14,9 @@ namespace INLOS::NewSkillMenu
     std::uint32_t InterfaceVersion();
 
     bool RefreshSkills();
-    const std::vector<std::string>& AvailableSkills();
+    std::vector<std::string> AvailableSkills();
     bool HasSkill(std::string_view a_skillID);
-    const std::vector<std::string>& AvailableResources();
+    std::vector<std::string> AvailableResources();
     bool HasResource(std::string_view a_resourceID);
 
     bool AddSkillExperience(

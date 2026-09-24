@@ -34,6 +34,7 @@ public:
     std::optional<std::string> CreatePackage(
         std::string_view displayName,
         std::string_view requestedID = {});
+    bool RenamePackage(std::string_view packageID, std::string_view displayName);
     const std::vector<RulePackage>& GetPackages() const { return _packages; }
 
     bool CreateSnapshot(

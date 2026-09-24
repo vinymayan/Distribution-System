@@ -3506,7 +3506,34 @@ void RemoveRuleRewards(RE::Actor* a_actor, const Rule& a_rule) {
                         for (uint32_t i = 0; i < baseNPC->perkCount; i++) {
                             if (baseNPC->perks[i].perk == perk) { isNative = true; break; }
                         }
-                        if (!isNative) a_actor->RemovePerk(perk);
+                        if (auto* inherited = a_actor->GetTemplateBase())
+                            isNative |= inherited->GetPerkIndex(perk).has_value();
+                        // A perk may be supplied by more than one EDF rule.
+                        // Removing this activation must preserve other owners.
+                        bool otherOwner = false;
+                        auto* saves = SaveStateManager::GetSingleton();
+                        auto& allStates = saves->GetSessionData().npcRuleVersions;
+                        auto states = allStates.find(SaveStateManager::BuildNPCKey(a_actor));
+                        if (states != allStates.end()) {
+                            for (const auto& [id, state] : states->second) {
+                                if (id == a_rule.id) continue;
+                                const auto* definition = RuleManager::GetSingleton()->GetRuleVersion(id, state.version);
+                                if (!definition) continue;
+                                const auto ownsPerk = [&](const auto& keys) {
+                                    for (const auto& key : keys) {
+                                        const RewardGroup* ownerGroup = nullptr;
+                                        const Reward* ownedReward = nullptr;
+                                        if (ResolveRewardState(*definition, key, ownerGroup, ownedReward) &&
+                                            ownedReward && ownedReward->typeReward == "Perk" &&
+                                            ResolveEDFFormID("Perk", ownedReward->editorID, ownedReward->formIDStr) == perk->GetFormID()) return true;
+                                    }
+                                    return false;
+                                };
+                                otherOwner |= (state.isActive && ownsPerk(state.activeRewardKeys)) ||
+                                    ownsPerk(state.persistentRewardKeys);
+                            }
+                        }
+                        if (!isNative && !otherOwner) a_actor->RemovePerk(perk);
                     }
                 }
             }
