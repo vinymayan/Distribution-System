@@ -3,7 +3,8 @@
     "section": "INLOS",
     "loot_rules": "Loot Rules",
     "processed_encounters": "Processed Encounters",
-    "settings": "Settings"
+    "settings": "Settings",
+    "export": "Export"
   },
   "auto": {
     "death": "Death",
@@ -12,6 +13,16 @@
     "victim": "Victim / Corpse",
     "player": "Player",
     "experience": "Experience",
-    "skill_experience": "Skill Experience"
+    "skill_experience": "Skill Experience",
+    "export_packages": "Export Packages",
+    "export_selection_help": "Select packages and rules to export. Package and rule identities, including saved version history, are preserved.",
+    "export_location": "ZIP files are saved to Data/Viny Mods/INLOS/Export.",
+    "archive_name": "Archive Name",
+    "clear_selection": "Clear Selection",
+    "export_selected": "Export Selected",
+    "export": "Export",
+    "rule": "Rule",
+    "version": "Version",
+    "selected_rules_and_packages": "Selected: %d rule(s) from %d package(s)"
   }
 }

@@ -611,54 +611,88 @@ namespace INLOS::UI
                     &playableOnly);
             }
 
-            std::vector<const InternalFormInfo*> source;
-            if (g_selectionType == "Selected") {
-                if (rewardMode) {
-                    for (const auto& reward : a_group->rewards) {
-                        const auto& list =
-                            Manager::GetSingleton()->GetList(
-                                reward.typeReward);
-                        const auto found = std::ranges::find_if(
-                            list,
-                            [&](const InternalFormInfo& a_info) {
-                                return MatchesForm(reward, a_info);
-                            });
-                        if (found != list.end()) {
-                            source.push_back(
-                                std::addressof(*found));
+            static std::vector<const InternalFormInfo*> source;
+            static std::vector<
+                DistributionCore::UI::SearchableComboOption> pluginOptions;
+            static std::vector<std::size_t> visibleIndices;
+            static std::string cachedType;
+            static std::string cachedPlugin;
+            static std::string cachedSearch;
+            static std::uint64_t cachedRevision = static_cast<std::uint64_t>(-1);
+            static std::uint64_t pluginOptionsRevision = 0;
+            static bool cachedRewardMode = false;
+            static bool cachedPlayableOnly = false;
+            const auto revision = Manager::GetSingleton()->GetListRevision();
+            const bool sourceChanged = cachedRevision != revision ||
+                cachedType != g_selectionType ||
+                cachedRewardMode != rewardMode ||
+                g_selectionType == "Selected";
+            if (sourceChanged) {
+                source.clear();
+                if (g_selectionType == "Selected") {
+                    if (rewardMode) {
+                        for (const auto& reward : a_group->rewards) {
+                            const auto& list =
+                                Manager::GetSingleton()->GetList(
+                                    reward.typeReward);
+                            const auto found = std::ranges::find_if(
+                                list,
+                                [&](const InternalFormInfo& a_info) {
+                                    return MatchesForm(reward, a_info);
+                                });
+                            if (found != list.end()) {
+                                source.push_back(std::addressof(*found));
+                            }
+                        }
+                    }
+                    else if (a_filters) {
+                        for (const auto& filter : *a_filters) {
+                            const auto& list =
+                                Manager::GetSingleton()->GetList(filter.type);
+                            const auto found = std::ranges::find_if(
+                                list,
+                                [&](const InternalFormInfo& a_info) {
+                                    return MatchesForm(filter, a_info);
+                                });
+                            if (found != list.end()) {
+                                source.push_back(std::addressof(*found));
+                            }
                         }
                     }
                 }
-                else if (a_filters) {
-                    for (const auto& filter : *a_filters) {
+                else {
+                    for (const auto& descriptor : descriptors) {
+                        if (g_selectionType != "All" &&
+                            descriptor.id != g_selectionType) {
+                            continue;
+                        }
                         const auto& list =
-                            Manager::GetSingleton()->GetList(
-                                filter.type);
-                        const auto found = std::ranges::find_if(
-                            list,
-                            [&](const InternalFormInfo& a_info) {
-                                return MatchesForm(filter, a_info);
-                            });
-                        if (found != list.end()) {
-                            source.push_back(
-                                std::addressof(*found));
+                            Manager::GetSingleton()->GetList(descriptor.id);
+                        for (const auto& info : list) {
+                            source.push_back(std::addressof(info));
                         }
                     }
                 }
-            }
-            else {
-                for (const auto& descriptor : descriptors) {
-                    if (g_selectionType != "All" &&
-                        descriptor.id != g_selectionType) {
-                        continue;
-                    }
-                    const auto& list =
-                        Manager::GetSingleton()->GetList(
-                            descriptor.id);
-                    for (const auto& info : list) {
-                        source.push_back(std::addressof(info));
+
+                std::set<std::string> plugins;
+                for (const auto* info : source) {
+                    if (info && !info->pluginName.empty()) {
+                        plugins.emplace(info->pluginName);
                     }
                 }
+                pluginOptions.clear();
+                pluginOptions.push_back({ "All", "All Plugins" });
+                for (const auto& plugin : plugins) {
+                    pluginOptions.push_back({ plugin, plugin });
+                }
+                if (g_selectionPlugin != "All" &&
+                    !plugins.contains(g_selectionPlugin)) {
+                    g_selectionPlugin = "All";
+                }
+                cachedType = g_selectionType;
+                cachedRewardMode = rewardMode;
+                cachedRevision = revision;
+                ++pluginOptionsRevision;
             }
 
             if (source.empty()) {
@@ -667,22 +701,6 @@ namespace INLOS::UI
                 return;
             }
 
-            std::set<std::string> plugins;
-            for (const auto* info : source) {
-                if (info && !info->pluginName.empty()) {
-                    plugins.emplace(info->pluginName);
-                }
-            }
-            std::vector<
-                DistributionCore::UI::SearchableComboOption>
-                pluginOptions{ { "All", "All Plugins" } };
-            for (const auto& plugin : plugins) {
-                pluginOptions.push_back({ plugin, plugin });
-            }
-            if (g_selectionPlugin != "All" &&
-                !plugins.contains(g_selectionPlugin)) {
-                g_selectionPlugin = "All";
-            }
             ImGuiMCP::SameLine();
             ImGuiMCP::SetNextItemWidth(300.0f);
             DistributionCore::UI::DrawSearchableCombo(
@@ -695,43 +713,43 @@ namespace INLOS::UI
                     "INLOS.FilterPlugin",
                 pluginOptions,
                 g_selectionPlugin,
-                Manager::GetSingleton()->GetListRevision());
+                pluginOptionsRevision);
 
-            std::string search = g_selectionSearch;
-            std::ranges::transform(
-                search,
-                search.begin(),
-                [](const unsigned char a_character) {
-                    return static_cast<char>(
-                        std::tolower(a_character));
-                });
-            std::vector<std::size_t> visibleIndices;
-            visibleIndices.reserve(source.size());
-            for (std::size_t index = 0;
-                 index < source.size();
-                 ++index) {
-                const auto* info = source[index];
-                if (!info ||
-                    (rewardMode && playableOnly &&
-                        !info->playable) ||
-                    (g_selectionPlugin != "All" &&
-                        info->pluginName !=
-                            g_selectionPlugin)) {
-                    continue;
-                }
-                auto searchable = info->name + " " +
-                    info->editorID;
+            if (sourceChanged || cachedPlugin != g_selectionPlugin ||
+                cachedSearch != g_selectionSearch ||
+                cachedPlayableOnly != playableOnly) {
+                std::string search = g_selectionSearch;
                 std::ranges::transform(
-                    searchable,
-                    searchable.begin(),
-                    [](const unsigned char a_character) {
-                        return static_cast<char>(
-                            std::tolower(a_character));
+                    search, search.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
                     });
-                if (search.empty() ||
-                    searchable.contains(search)) {
+                visibleIndices.clear();
+                visibleIndices.reserve(source.size());
+                for (std::size_t index = 0; index < source.size(); ++index) {
+                    const auto* info = source[index];
+                    if (!info ||
+                        (rewardMode && playableOnly && !info->playable) ||
+                        (g_selectionPlugin != "All" &&
+                            info->pluginName != g_selectionPlugin)) {
+                        continue;
+                    }
+                    if (!search.empty()) {
+                        auto searchable = info->name + " " + info->editorID;
+                        std::ranges::transform(
+                            searchable, searchable.begin(),
+                            [](const unsigned char character) {
+                                return static_cast<char>(std::tolower(character));
+                            });
+                        if (!searchable.contains(search)) {
+                            continue;
+                        }
+                    }
                     visibleIndices.push_back(index);
                 }
+                cachedPlugin = g_selectionPlugin;
+                cachedSearch = g_selectionSearch;
+                cachedPlayableOnly = playableOnly;
             }
 
             ImGuiMCP::ImVec2 available;
@@ -2667,8 +2685,8 @@ namespace INLOS::UI
                 a_lootRule.trigger,
                 {
                     { Trigger::kDeath, "Death" },
-                    { Trigger::kDefeat, "Defeat" },
-                    { Trigger::kBoth, "Death or Defeat" }
+                    // { Trigger::kDefeat, "Defeat" },
+                    // { Trigger::kBoth, "Death or Defeat" }
                 });
             EnumCombo(
                 "Destination",
@@ -2796,8 +2814,8 @@ namespace INLOS::UI
                 a_lootRule.trigger,
                 {
                     { Trigger::kDeath, "Death" },
-                    { Trigger::kDefeat, "Defeat" },
-                    { Trigger::kBoth, "Death or Defeat" }
+                    // { Trigger::kDefeat, "Defeat" },
+                    // { Trigger::kBoth, "Death or Defeat" }
                 });
             ImGuiMCP::SameLine();
             ImGuiMCP::TextUnformatted("Destination:");
@@ -3083,13 +3101,6 @@ namespace INLOS::UI
         ImGuiMCP::SameLine();
         if (ImGuiMCP::Button("Save")) {
             store->SaveAll();
-        }
-        ImGuiMCP::SameLine();
-        if (ImGuiMCP::Button("Export Active Package")) {
-            if (store->SaveAll()) {
-                store->ExportPackage(
-                    g_activePackage, {});
-            }
         }
         ImGuiMCP::Separator();
         ImGuiMCP::TextUnformatted("Active Filters:");
@@ -3393,6 +3404,123 @@ namespace INLOS::UI
             "INLOSExperienceGained: numArg is gained XP and strArg is total XP.");
     }
 
+    void RenderExport()
+    {
+        static std::set<std::string> selectedRules;
+        static char archiveName[128] = "INLOS_Export";
+        auto* store = Store::GetSingleton();
+        const auto& rules = store->Rules();
+        std::erase_if(selectedRules, [&](const std::string& id) {
+            return std::ranges::none_of(rules, [&](const LootRule& rule) {
+                return rule.criteria.id == id &&
+                    !store->IsPackagePendingDeletion(rule.criteria.packageID);
+            });
+        });
+
+        ImGuiMCP::TextUnformatted(GetLoc(
+            "auto.export_packages", "Export Packages"));
+        ImGuiMCP::Separator();
+        ImGuiMCP::TextWrapped(GetLoc(
+            "auto.export_selection_help",
+            "Select packages and rules to export. Package and rule identities, "
+            "including saved version history, are preserved."));
+        ImGuiMCP::TextDisabled("%s", GetLoc(
+            "auto.export_location",
+            "ZIP files are saved to Data/Viny Mods/INLOS/Export."));
+        ImGuiMCP::SetNextItemWidth(260.0f);
+        ImGuiMCP::InputText(
+            GetLoc("auto.archive_name", "Archive Name"),
+            archiveName, sizeof(archiveName));
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button(GetLoc(
+                "auto.clear_selection", "Clear Selection"))) {
+            selectedRules.clear();
+        }
+        ImGuiMCP::SameLine();
+        if (ImGuiMCP::Button(GetLoc(
+                "auto.export_selected", "Export Selected")) &&
+            !selectedRules.empty() && store->SaveAll()) {
+            store->ExportRulesPackage(archiveName, selectedRules);
+        }
+        ImGuiMCP::Separator();
+
+        std::size_t selectedPackages = 0;
+        for (const auto& package : store->Packages()) {
+            if (store->IsPackagePendingDeletion(package.id)) {
+                continue;
+            }
+            std::vector<const LootRule*> packageRules;
+            for (const auto& rule : rules) {
+                if (rule.criteria.packageID == package.id) {
+                    packageRules.push_back(std::addressof(rule));
+                }
+            }
+            if (packageRules.empty()) {
+                continue;
+            }
+            const auto selectedCount = static_cast<std::size_t>(
+                std::ranges::count_if(packageRules, [&](const LootRule* rule) {
+                    return selectedRules.contains(rule->criteria.id);
+                }));
+            selectedPackages += selectedCount > 0;
+            ImGuiMCP::PushID(package.id.c_str());
+            bool selectAll = selectedCount == packageRules.size();
+            if (selectedCount > 0 && !selectAll) {
+                ImGuiMCP::PushItemFlag(
+                    ImGuiMCP::ImGuiItemFlags_MixedValue, true);
+            }
+            const bool changed = ImGuiMCP::Checkbox("##package", &selectAll);
+            if (selectedCount > 0 && selectedCount < packageRules.size()) {
+                ImGuiMCP::PopItemFlag();
+            }
+            if (changed) {
+                for (const auto* rule : packageRules) {
+                    if (selectAll) selectedRules.insert(rule->criteria.id);
+                    else selectedRules.erase(rule->criteria.id);
+                }
+            }
+            ImGuiMCP::SameLine();
+            const auto header = std::format("{} [{}/{}]###package",
+                package.displayName, selectedCount, packageRules.size());
+            if (ImGuiMCP::CollapsingHeader(header.c_str())) {
+                ImGuiMCP::TextDisabled("%s", package.id.c_str());
+                if (ImGuiMCP::BeginTable("Rules", 3,
+                        ImGuiMCP::ImGuiTableFlags_Borders |
+                        ImGuiMCP::ImGuiTableFlags_RowBg)) {
+                    ImGuiMCP::TableSetupColumn(GetLoc("auto.export", "Export"),
+                        ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                    ImGuiMCP::TableSetupColumn(GetLoc("auto.rule", "Rule"),
+                        ImGuiMCP::ImGuiTableColumnFlags_WidthStretch);
+                    ImGuiMCP::TableSetupColumn(GetLoc("auto.version", "Version"),
+                        ImGuiMCP::ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    ImGuiMCP::TableHeadersRow();
+                    for (const auto* rule : packageRules) {
+                        ImGuiMCP::PushID(rule->criteria.id.c_str());
+                        ImGuiMCP::TableNextRow();
+                        ImGuiMCP::TableSetColumnIndex(0);
+                        bool selected = selectedRules.contains(rule->criteria.id);
+                        if (ImGuiMCP::Checkbox("##rule", &selected)) {
+                            if (selected) selectedRules.insert(rule->criteria.id);
+                            else selectedRules.erase(rule->criteria.id);
+                        }
+                        ImGuiMCP::TableSetColumnIndex(1);
+                        ImGuiMCP::TextUnformatted(rule->criteria.name.c_str());
+                        ImGuiMCP::TableSetColumnIndex(2);
+                        ImGuiMCP::Text("%d", rule->criteria.version);
+                        ImGuiMCP::PopID();
+                    }
+                    ImGuiMCP::EndTable();
+                }
+            }
+            ImGuiMCP::PopID();
+        }
+        ImGuiMCP::Text(GetLoc(
+                "auto.selected_rules_and_packages",
+                "Selected: %d rule(s) from %d package(s)"),
+            static_cast<int>(selectedRules.size()),
+            static_cast<int>(selectedPackages));
+    }
+
     void Register()
     {
         if (!SKSEMenuFramework::IsInstalled()) {
@@ -3412,6 +3540,9 @@ namespace INLOS::UI
                 "INLOS/{}",
                 GetLoc("menu.settings", "Settings")),
             RenderSettings);
+        SKSEMenuFramework::AddSectionItem(
+            std::format("INLOS/{}", GetLoc("menu.export", "Export")),
+            RenderExport);
         logger::info("[INLOS] UI registered.");
     }
 }

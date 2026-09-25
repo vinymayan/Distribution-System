@@ -21,9 +21,9 @@ namespace INLOS
             std::string_view a_displayName);
         LootRule& CreateRule(std::string_view a_packageID);
         bool DeleteRule(std::string_view a_ruleID);
-        bool ExportPackage(
-            std::string_view a_packageID,
-            std::string_view a_archiveName);
+        bool ExportRulesPackage(
+            std::string_view a_archiveName,
+            const std::set<std::string>& a_ruleIDs);
         bool MarkPackageForDeletion(std::string_view a_packageID);
         bool CancelPackageDeletion(std::string_view a_packageID);
         bool IsPackagePendingDeletion(

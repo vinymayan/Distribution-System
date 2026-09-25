@@ -7,6 +7,7 @@
 #include <sqlite3.h>
 
 #include <fstream>
+#include <map>
 #include <random>
 #include <sstream>
 
@@ -1188,14 +1189,20 @@ CREATE TABLE IF NOT EXISTS rewards(
         return true;
     }
 
-    bool Store::ExportPackage(
-        const std::string_view a_packageID,
-        const std::string_view a_archiveName)
+    bool Store::ExportRulesPackage(
+        const std::string_view a_archiveName,
+        const std::set<std::string>& a_ruleIDs)
     {
         std::scoped_lock lock(_lock);
-        const auto package = std::ranges::find(
-            _packages, a_packageID, &Package::id);
-        if (package == _packages.end()) {
+        std::map<std::string, std::set<std::string>> selectedByPackage;
+        for (const auto& rule : _rules) {
+            if (a_ruleIDs.contains(rule.criteria.id) &&
+                !_packagesToDelete.contains(rule.criteria.packageID)) {
+                selectedByPackage[rule.criteria.packageID].insert(
+                    rule.criteria.id);
+            }
+        }
+        if (selectedByPackage.empty()) {
             return false;
         }
 
@@ -1208,49 +1215,96 @@ CREATE TABLE IF NOT EXISTS rewards(
         }
         const auto archiveBase = SanitizeFolder(
             a_archiveName.empty() ?
-                package->displayName :
+                "INLOS_Export" :
                 a_archiveName);
         const auto archivePath =
             exportRoot / (archiveBase + ".zip");
-        const auto snapshotPath =
-            exportRoot /
-            std::format(".inlos-snapshot-{}.db", GenerateUUID());
-
-        sqlite3* source = nullptr;
-        sqlite3* destination = nullptr;
-        const auto sourcePath = package->path / "package.db";
-        bool snapshotReady = false;
-        if (sqlite3_open_v2(
-                sourcePath.string().c_str(),
-                &source,
-                SQLITE_OPEN_READONLY,
-                nullptr) == SQLITE_OK &&
-            sqlite3_open_v2(
-                snapshotPath.string().c_str(),
-                &destination,
-                SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
-                nullptr) == SQLITE_OK) {
-            if (auto* backup = sqlite3_backup_init(
-                    destination, "main", source, "main")) {
-                const auto step = sqlite3_backup_step(backup, -1);
-                const auto finish = sqlite3_backup_finish(backup);
-                snapshotReady =
-                    (step == SQLITE_DONE || step == SQLITE_OK) &&
-                    finish == SQLITE_OK;
+        std::vector<std::pair<const Package*, std::filesystem::path>> snapshots;
+        const auto cleanup = [&] {
+            for (const auto& entry : snapshots) {
+                const auto& path = entry.second;
+                std::filesystem::remove(path, error);
+                std::filesystem::remove(path.string() + "-wal", error);
+                std::filesystem::remove(path.string() + "-shm", error);
+                std::filesystem::remove(path.string() + "-journal", error);
             }
-        }
-        if (destination) {
-            sqlite3_close(destination);
-        }
-        if (source) {
-            sqlite3_close(source);
-        }
-        if (!snapshotReady) {
-            std::filesystem::remove(snapshotPath, error);
-            logger::error(
-                "[INLOS Store] SQLite backup failed for package '{}'.",
-                package->displayName);
-            return false;
+        };
+        for (const auto& [packageID, selectedRules] : selectedByPackage) {
+            const auto package = std::ranges::find(
+                _packages, packageID, &Package::id);
+            if (package == _packages.end()) {
+                cleanup();
+                return false;
+            }
+            const auto snapshotPath = exportRoot /
+                std::format(".inlos-snapshot-{}.db", GenerateUUID());
+            snapshots.emplace_back(std::addressof(*package), snapshotPath);
+            bool snapshotReady = false;
+            {
+                Database source;
+                Database destination;
+                const auto sourcePath = package->path / "package.db";
+                if (sqlite3_open_v2(sourcePath.string().c_str(),
+                        &source.handle, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+                    sqlite3_open_v2(snapshotPath.string().c_str(),
+                        &destination.handle,
+                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                        nullptr) == SQLITE_OK) {
+                    if (auto* backup = sqlite3_backup_init(
+                            destination.handle, "main", source.handle, "main")) {
+                        const auto step = sqlite3_backup_step(backup, -1);
+                        const auto finish = sqlite3_backup_finish(backup);
+                        snapshotReady = step == SQLITE_DONE && finish == SQLITE_OK;
+                    }
+                }
+            }
+            if (snapshotReady) {
+                Database snapshot;
+                snapshotReady = sqlite3_open_v2(
+                    snapshotPath.string().c_str(), &snapshot.handle,
+                    SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK &&
+                    Exec(snapshot.handle, "PRAGMA foreign_keys=ON", "export foreign keys") &&
+                    Exec(snapshot.handle, "PRAGMA journal_mode=DELETE", "export journal mode") &&
+                    Exec(snapshot.handle, "BEGIN IMMEDIATE", "begin export selection");
+                if (snapshotReady) {
+                    Statement rules;
+                    Statement remove;
+                    snapshotReady = Prepare(snapshot.handle,
+                        "SELECT rule_id FROM rules", rules, "list export rules") &&
+                        Prepare(snapshot.handle,
+                            "DELETE FROM rules WHERE rule_id=?1", remove,
+                            "remove unselected export rule");
+                    std::vector<std::string> unselected;
+                    int step = SQLITE_OK;
+                    while (snapshotReady &&
+                        (step = sqlite3_step(rules.handle)) == SQLITE_ROW) {
+                        const auto ruleID = ColumnText(rules.handle, 0);
+                        if (!selectedRules.contains(ruleID)) {
+                            unselected.push_back(ruleID);
+                        }
+                    }
+                    snapshotReady = snapshotReady && step == SQLITE_DONE;
+                    for (const auto& ruleID : unselected) {
+                        if (!snapshotReady) break;
+                        sqlite3_reset(remove.handle);
+                        sqlite3_clear_bindings(remove.handle);
+                        BindText(remove.handle, 1, ruleID);
+                        snapshotReady = sqlite3_step(remove.handle) == SQLITE_DONE;
+                    }
+                    snapshotReady = snapshotReady && Exec(snapshot.handle,
+                        "COMMIT", "commit export selection");
+                    if (!snapshotReady) {
+                        Exec(snapshot.handle, "ROLLBACK", "rollback export selection");
+                    }
+                }
+            }
+            if (!snapshotReady) {
+                cleanup();
+                logger::error(
+                    "[INLOS Store] Could not snapshot package '{}'.",
+                    package->displayName);
+                return false;
+            }
         }
 
         mz_zip_archive archive{};
@@ -1259,26 +1313,23 @@ CREATE TABLE IF NOT EXISTS rewards(
             archivePath.string().c_str(),
             0);
         bool success = zipInitialized;
-        const auto packageFolder = package->path.filename().string();
-        const auto internalRoot =
-            "Viny Mods/INLOS/Packages/" + packageFolder + "/";
-        if (success) {
+        for (const auto& [package, snapshotPath] : snapshots) {
+            if (!success) {
+                break;
+            }
+            const auto internalRoot =
+                "Viny Mods/INLOS/Packages/" +
+                package->path.filename().generic_string() + "/";
             success = mz_zip_writer_add_file(
                 std::addressof(archive),
                 (internalRoot + "manifest.json").c_str(),
                 (package->path / "manifest.json").string().c_str(),
-                nullptr,
-                0,
-                MZ_BEST_COMPRESSION);
-        }
-        if (success) {
-            success = mz_zip_writer_add_file(
-                std::addressof(archive),
-                (internalRoot + "package.db").c_str(),
-                snapshotPath.string().c_str(),
-                nullptr,
-                0,
-                MZ_BEST_COMPRESSION);
+                nullptr, 0, MZ_BEST_COMPRESSION) &&
+                mz_zip_writer_add_file(
+                    std::addressof(archive),
+                    (internalRoot + "package.db").c_str(),
+                    snapshotPath.string().c_str(),
+                    nullptr, 0, MZ_BEST_COMPRESSION);
         }
         if (zipInitialized) {
             success =
@@ -1287,17 +1338,16 @@ CREATE TABLE IF NOT EXISTS rewards(
                 success;
             mz_zip_writer_end(std::addressof(archive));
         }
-        std::filesystem::remove(snapshotPath, error);
+        cleanup();
         if (!success) {
             std::filesystem::remove(archivePath, error);
             logger::error(
-                "[INLOS Store] Could not export package '{}'.",
-                package->displayName);
+                "[INLOS Store] Could not export selected rules.");
             return false;
         }
         logger::info(
-            "[INLOS Store] Exported package '{}' to '{}'.",
-            package->displayName,
+            "[INLOS Store] Exported {} package(s) to '{}'.",
+            snapshots.size(),
             archivePath.string());
         return true;
     }
