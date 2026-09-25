@@ -4229,8 +4229,8 @@ namespace SPIDUI {
                         throw std::runtime_error("Failed to build the converted SQL package.");
                     }
                     const auto folder = sqlPackage.path.filename().generic_string();
-                    const auto manifestInternal = std::format("Viny Mods/EDF/Packages/{}/manifest.json", folder);
-                    const auto databaseInternal = std::format("Viny Mods/EDF/Packages/{}/package.db", folder);
+                    const auto manifestInternal = std::format("Data/Viny Mods/EDF/Packages/{}/manifest.json", folder);
+                    const auto databaseInternal = std::format("Data/Viny Mods/EDF/Packages/{}/package.db", folder);
                     if (!mz_zip_writer_add_file(
                             &zip,
                             manifestInternal.c_str(),
@@ -4248,7 +4248,7 @@ namespace SPIDUI {
                         throw std::runtime_error("Failed to add the SQL package to the conversion ZIP.");
                     }
                     details << "[Package] " << packageRules.size() << " rule(s) -> "
-                            << "Viny Mods/EDF/Packages/" << folder << "/package.db\n";
+                            << "Data/Viny Mods/EDF/Packages/" << folder << "/package.db\n";
                 }
 
                 AppendFileList(report, "Converted files", result.convertedFiles);

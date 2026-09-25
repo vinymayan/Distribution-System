@@ -1318,7 +1318,7 @@ CREATE TABLE IF NOT EXISTS rewards(
                 break;
             }
             const auto internalRoot =
-                "Viny Mods/INLOS/Packages/" +
+                "Data/Viny Mods/INLOS/Packages/" +
                 package->path.filename().generic_string() + "/";
             success = mz_zip_writer_add_file(
                 std::addressof(archive),

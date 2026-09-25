@@ -2421,9 +2421,9 @@ bool RuleManager::ExportRulesPackage(const std::string& packageName, const std::
     for (const auto& package : snapshots) {
         const auto folder = package.path.filename().generic_string();
         const auto manifestInternal = std::format(
-            "Viny Mods/EDF/Packages/{}/manifest.json", folder);
+            "Data/Viny Mods/EDF/Packages/{}/manifest.json", folder);
         const auto databaseInternal = std::format(
-            "Viny Mods/EDF/Packages/{}/package.db", folder);
+            "Data/Viny Mods/EDF/Packages/{}/package.db", folder);
         ok =
             mz_zip_writer_add_file(
                 &zip,
